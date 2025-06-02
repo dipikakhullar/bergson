@@ -6,7 +6,7 @@ from torch.utils.hooks import RemovableHandle
 
 
 class BaseTracker:
-    """Base class for tracking module activations, gradients, and scores."""
+    """Base class for tracking module activations and gradients."""
 
     def __init__(self, module: nn.Module) -> None:
         """Initializes an instance of the `BaseTracker` class.
@@ -18,7 +18,7 @@ class BaseTracker:
         self.module = module
         self.registered_hooks: List[RemovableHandle] = []
         self.cached_hooks: List[RemovableHandle] = []
-        self.cached_activations: Optional[Union[List[torch.Tensor]], torch.Tensor] = None
+        self.cached_activations: Optional[Union[List[torch.Tensor], torch.Tensor]] = None
         self.cached_per_sample_gradient: Optional[torch.Tensor] = None
 
     def release_hooks(self) -> None:

@@ -5,34 +5,21 @@ import torch
 from accelerate.utils.dataclasses import BaseEnum
 from torch import nn
 
-from quelle.hessians.arguments import FactorArguments, ScoreArguments
-from quelle.hessians.factor.config import FactorConfig
+from quelle.hessians.arguments import FactorArguments
 from quelle.hessians.module.tracker.base import BaseTracker
 from quelle.hessians.module.tracker.factor import CovarianceTracker, LambdaTracker
-from quelle.hessians.module.tracker.gradient import GradientTracker
-from quelle.hessians.module.tracker.pairwise_score import PairwiseScoreTracker
-from quelle.hessians.module.tracker.precondition import PreconditionTracker
-from quelle.hessians.module.tracker.self_score import (
-    SelfScoreTracker,
-    SelfScoreWithMeasurementTracker,
-)
 from quelle.hessians.utils.constants import (
-    ACCUMULATED_PRECONDITIONED_GRADIENT_NAME,
-    AGGREGATED_GRADIENT_NAME,
     COVARIANCE_FACTOR_NAMES,
     EIGENDECOMPOSITION_FACTOR_NAMES,
     LAMBDA_FACTOR_NAMES,
-    PAIRWISE_SCORE_MATRIX_NAME,
-    PRECONDITIONED_GRADIENT_NAME,
     PRECONDITIONED_GRADIENT_TYPE,
-    SELF_SCORE_VECTOR_NAME,
 )
 
 
 class ModuleMode(str, BaseEnum):
-    """Enum representing a module's mode for factor and score computation.
+    """Enum representing a module's mode for factor computation.
 
-    This enum indicates which factors and scores need to be computed during
+    This enum indicates which factors need to be computed during
     forward and backward passes.
     """
 
@@ -40,14 +27,11 @@ class ModuleMode(str, BaseEnum):
     COVARIANCE = "covariance"
     LAMBDA = "lambda"
     PRECONDITION_GRADIENT = "precondition_gradient"
-    PAIRWISE_SCORE = "pairwise_score"
-    SELF_SCORE = "self_score"
-    SELF_MEASUREMENT_SCORE = "self_measurement_score"
     GRADIENT_AGGREGATION = "gradient_aggregation"
 
 
 class TrackedModule(nn.Module):
-    """A wrapper class for PyTorch modules to compute influence factors and scores.
+    """A wrapper class for PyTorch modules to compute influence factors.
 
     This class extends `nn.Module` to add functionality for tracking and computing
     various influence-related metrics.
@@ -73,7 +57,6 @@ class TrackedModule(nn.Module):
         name: str,
         original_module: nn.Module,
         factor_args: Optional[FactorArguments] = None,
-        score_args: Optional[ScoreArguments] = None,
         per_sample_gradient_process_fnc: Optional[Callable] = None,
     ) -> None:
         """Initializes an instance of the `TrackedModule` class.
@@ -85,8 +68,6 @@ class TrackedModule(nn.Module):
                 The original module to be wrapped.
             factor_args (FactorArguments, optional):
                 Arguments for computing factors.
-            score_args (ScoreArguments, optional):
-                Arguments for computing influence scores.
             per_sample_gradient_process_fnc (Callable, optional):
                 Optional function to post-process per-sample gradients.
         """
@@ -94,6 +75,8 @@ class TrackedModule(nn.Module):
 
         self.name = name
         self.original_module = original_module
+
+        assert isinstance(self.original_module.weight.dtype, torch.dtype)
         self._constant: torch.Tensor = nn.Parameter(
             torch.zeros(
                 1,
@@ -103,18 +86,12 @@ class TrackedModule(nn.Module):
         )
         self.current_mode = ModuleMode.DEFAULT
         self.factor_args = FactorArguments() if factor_args is None else factor_args
-        self.score_args = ScoreArguments() if score_args is None else score_args
         self.per_sample_gradient_process_fnc = per_sample_gradient_process_fnc
 
         self._trackers = {
             ModuleMode.DEFAULT: BaseTracker(self),
             ModuleMode.COVARIANCE: CovarianceTracker(self),
             ModuleMode.LAMBDA: LambdaTracker(self),
-            ModuleMode.GRADIENT_AGGREGATION: GradientTracker(self),
-            ModuleMode.PRECONDITION_GRADIENT: PreconditionTracker(self),
-            ModuleMode.PAIRWISE_SCORE: PairwiseScoreTracker(self),
-            ModuleMode.SELF_SCORE: SelfScoreTracker(self),
-            ModuleMode.SELF_MEASUREMENT_SCORE: SelfScoreWithMeasurementTracker(self),
         }
 
         self.attention_mask: Optional[torch.Tensor] = None
@@ -124,7 +101,7 @@ class TrackedModule(nn.Module):
         self._initialize_storage()
 
     def _initialize_storage(self) -> None:
-        """Initializes storage for various factors and scores."""
+        """Initializes storage for various factors."""
 
         # Storage for activation and pseudo-gradient covariance matrices #
         for covariance_factor_name in COVARIANCE_FACTOR_NAMES:
@@ -137,13 +114,6 @@ class TrackedModule(nn.Module):
         # Storage for lambda matrices #
         for lambda_factor_name in LAMBDA_FACTOR_NAMES:
             self.storage[lambda_factor_name]: Optional[torch.Tensor] = None
-
-        # Storage for preconditioned gradients and influence scores #
-        self.storage[AGGREGATED_GRADIENT_NAME]: Optional[torch.Tensor] = None
-        self.storage[PRECONDITIONED_GRADIENT_NAME]: PRECONDITIONED_GRADIENT_TYPE = None
-        self.storage[ACCUMULATED_PRECONDITIONED_GRADIENT_NAME]: PRECONDITIONED_GRADIENT_TYPE = None
-        self.storage[PAIRWISE_SCORE_MATRIX_NAME]: Optional[torch.Tensor] = None
-        self.storage[SELF_SCORE_VECTOR_NAME]: Optional[torch.Tensor] = None
 
     def forward(self, inputs: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
         """Performs a forward pass of the tracked module.
@@ -167,21 +137,6 @@ class TrackedModule(nn.Module):
             return outputs
         return outputs + self._constant
 
-    def prepare_storage(self, device: torch.device) -> None:
-        """Prepares storage for computing influence scores.
-
-        This method performs necessary operations on storage before computing influence scores.
-
-        Args:
-            device (torch.device):
-                The device to prepare the storage for.
-        """
-        FactorConfig.CONFIGS[self.factor_args.strategy].prepare(
-            storage=self.storage,
-            score_args=self.score_args,
-            device=device,
-        )
-
     def update_factor_args(self, factor_args: FactorArguments) -> None:
         """Updates the factor arguments.
 
@@ -190,15 +145,6 @@ class TrackedModule(nn.Module):
                 New factor arguments to set.
         """
         self.factor_args = factor_args
-
-    def update_score_args(self, score_args: ScoreArguments) -> None:
-        """Updates the score arguments.
-
-        Args:
-            score_args (ScoreArguments):
-                New score arguments to set.
-        """
-        self.score_args = score_args
 
     def get_factor(self, factor_name: str) -> Optional[torch.Tensor]:
         """Retrieves a factor by name from storage.
@@ -382,35 +328,3 @@ class TrackedModule(nn.Module):
                 The per-sample gradient tensor.
         """
         raise NotImplementedError("Subclasses must implement the `compute_per_sample_gradient` method.")
-
-    @abstractmethod
-    def compute_pairwise_score(
-        self, preconditioned_gradient: torch.Tensor, input_activation: torch.Tensor, output_gradient: torch.Tensor
-    ) -> torch.Tensor:
-        """Computes pairwise influence scores.
-
-        Args:
-            preconditioned_gradient (torch.Tensor):
-                The preconditioned gradient.
-            input_activation (torch.Tensor):
-                The input tensor to the module, provided by the PyTorch's forward hook.
-            output_gradient (torch.Tensor):
-                The gradient tensor with respect to the output of the module, provided by the PyTorch's backward hook.
-        """
-        raise NotImplementedError("Subclasses must implement the `compute_pairwise_score` method.")
-
-    @abstractmethod
-    def compute_self_measurement_score(
-        self, preconditioned_gradient: torch.Tensor, input_activation: torch.Tensor, output_gradient: torch.Tensor
-    ) -> torch.Tensor:
-        """Computes self-influence scores with measurement.
-
-        Args:
-            preconditioned_gradient (torch.Tensor):
-                The preconditioned gradient.
-            input_activation (torch.Tensor):
-                The input tensor to the module, provided by the PyTorch's forward hook.
-            output_gradient (torch.Tensor):
-                The gradient tensor with respect to the output of the module, provided by the PyTorch's backward hook.
-        """
-        raise NotImplementedError("Subclasses must implement the `compute_self_measurement_score` method.")

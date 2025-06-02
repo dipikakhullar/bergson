@@ -10,7 +10,6 @@ from torch.utils import data
 
 from quelle.hessians.arguments import FactorArguments
 from quelle.hessians.computer.factor_computer import FactorComputer
-from quelle.hessians.computer.score_computer import ScoreComputer
 from quelle.hessians.module.utils import wrap_tracked_modules
 from quelle.hessians.task import Task
 from quelle.hessians.utils.dataset import DataLoaderKwargs
@@ -45,8 +44,8 @@ def prepare_model(
     return model
 
 
-class Analyzer(FactorComputer, ScoreComputer):
-    """Handles the computation of factors (e.g., covariance matrices) and scores for a given PyTorch model."""
+class Analyzer(FactorComputer):
+    """Handles the computation of factors (e.g., covariance matrices) for a given PyTorch model."""
 
     def __init__(
         self,
@@ -121,17 +120,13 @@ class Analyzer(FactorComputer, ScoreComputer):
     def _save_model(self) -> None:
         """Saves the model to the output directory."""
         model_save_path = self.output_dir / "model.safetensors"
-        extracted_model = extract_model_from_parallel(
-            model=copy.deepcopy(self.model), keep_fp32_wrapper=True
-        )
+        extracted_model = extract_model_from_parallel(model=copy.deepcopy(self.model), keep_fp32_wrapper=True)
 
         if model_save_path.exists():
             self.logger.info(f"Found existing saved model at `{model_save_path}`.")
             # Load existing model's `state_dict` for comparison.
             loaded_state_dict = load_file(model_save_path)
-            if not verify_models_equivalence(
-                loaded_state_dict, extracted_model.state_dict()
-            ):
+            if not verify_models_equivalence(loaded_state_dict, extracted_model.state_dict()):
                 error_msg = (
                     "Detected a difference between the current model and the one saved at "
                     f"`{model_save_path}`. Consider using a different `analysis_name` to avoid conflicts."
@@ -225,8 +220,7 @@ class Analyzer(FactorComputer, ScoreComputer):
 
     @staticmethod
     def get_module_summary(model: nn.Module) -> str:
-        """Generates a formatted summary of the model's modules, excluding those without parameters. This summary is
-        useful for identifying which modules to compute influence scores for.
+        """Generates a formatted summary of the model's modules, excluding those without parameters.
 
         Args:
             model (nn.Module):

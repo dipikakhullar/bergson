@@ -12,7 +12,7 @@ from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.utils import data
 from torch.utils.data import DistributedSampler, SequentialSampler
 
-from quelle.hessians.arguments import Arguments, FactorArguments, ScoreArguments
+from quelle.hessians.arguments import Arguments, FactorArguments
 from quelle.hessians.factor.covariance import (
     covariance_matrices_exist,
     load_covariance_matrices,
@@ -29,16 +29,11 @@ from quelle.hessians.module.utils import (
     make_modules_partition,
     set_mode,
 )
-from quelle.hessians.score.pairwise import load_pairwise_scores, pairwise_scores_exist
-from quelle.hessians.score.self import load_self_scores, self_scores_exist
 from quelle.hessians.task import Task
 from quelle.hessians.utils.constants import (
     FACTOR_ARGUMENTS_NAME,
     FACTOR_SAVE_PREFIX,
     FACTOR_TYPE,
-    SCORE_ARGUMENTS_NAME,
-    SCORE_SAVE_PREFIX,
-    SCORE_TYPE,
 )
 from quelle.hessians.utils.dataset import (
     DataLoaderKwargs,
@@ -127,10 +122,6 @@ class Computer(ABC):
     def factors_output_dir(self, factors_name: str) -> Path:
         """Generates an output directory for storing all factors."""
         return (self.output_dir / (FACTOR_SAVE_PREFIX + factors_name)).resolve()
-
-    def scores_output_dir(self, scores_name: str) -> Path:
-        """Generates an output directory for storing all scores."""
-        return (self.output_dir / (SCORE_SAVE_PREFIX + scores_name)).resolve()
 
     def _save_arguments(
         self,
@@ -361,28 +352,6 @@ class Computer(ABC):
         if not lambda_matrices_exist(output_dir=factors_output_dir):
             return None
         return load_lambda_matrices(output_dir=factors_output_dir)
-
-    def load_score_args(self, scores_name: str) -> Optional[ScoreArguments]:
-        """Loads score arguments with the given score name."""
-        scores_output_dir = self.scores_output_dir(scores_name=scores_name)
-        arguments_save_path = scores_output_dir / f"{SCORE_ARGUMENTS_NAME}_arguments.json"
-        if not arguments_save_path.exists():
-            return None
-        return ScoreArguments(**load_json(arguments_save_path))
-
-    def load_pairwise_scores(self, scores_name: str) -> Optional[SCORE_TYPE]:
-        """Loads pairwise scores with the given score name."""
-        scores_output_dir = self.scores_output_dir(scores_name=scores_name)
-        if pairwise_scores_exist(output_dir=scores_output_dir):
-            return load_pairwise_scores(output_dir=scores_output_dir)
-        return None
-
-    def load_self_scores(self, scores_name: str) -> Optional[SCORE_TYPE]:
-        """Loads self-influence scores with the given score name."""
-        scores_output_dir = self.scores_output_dir(scores_name=scores_name)
-        if self_scores_exist(output_dir=scores_output_dir):
-            return load_self_scores(output_dir=scores_output_dir)
-        return None
 
     def load_all_factors(self, factors_name: str) -> FACTOR_TYPE:
         """Loads all relevant factors from disk."""

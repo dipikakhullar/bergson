@@ -6,7 +6,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel.data_parallel import DataParallel as DP
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 
-from quelle.hessians.arguments import FactorArguments, ScoreArguments
+from quelle.hessians.arguments import FactorArguments
 from quelle.hessians.module.tracked_module import ModuleMode, TrackedModule
 from quelle.hessians.task import Task
 from quelle.hessians.utils.exceptions import IllegalTaskConfigurationError
@@ -34,7 +34,6 @@ def wrap_tracked_modules(
     model: nn.Module,
     task: Optional[Task] = None,
     factor_args: Optional[FactorArguments] = None,
-    score_args: Optional[ScoreArguments] = None,
 ) -> nn.Module:
     """Inspects all modules within the model and, if supported modules are found, wraps them with `TrackedModule`.
 
@@ -45,8 +44,7 @@ def wrap_tracked_modules(
             The specific task associated with the model.
         factor_args (FactorArguments, optional):
             Arguments related to computing influence factors.
-        score_args (ScoreArguments, optional):
-            Arguments related to computing influence scores.
+
 
     Returns:
         nn.Module:
@@ -82,7 +80,6 @@ def wrap_tracked_modules(
                 original_module=module,
                 per_sample_gradient_process_fnc=per_sample_gradient_process_fnc,
                 factor_args=factor_args,
-                score_args=score_args,
             )
             parent, target_name = _get_submodules(model=model, key=module_name)
             setattr(parent, target_name, tracked_module)
@@ -134,7 +131,7 @@ def make_modules_partition(total_module_names: List[str], partition_size: int) -
 def set_mode(
     model: nn.Module,
     mode: ModuleMode,
-    tracked_module_names: List[str] = None,
+    tracked_module_names: Optional[List[str]] = None,
     release_memory: bool = False,
 ) -> None:
     """Sets the module mode of specified `TrackedModule` instances within a model.
@@ -170,20 +167,6 @@ def update_factor_args(model: nn.Module, factor_args: FactorArguments) -> None:
             module.update_factor_args(factor_args=factor_args)
 
 
-def update_score_args(model: nn.Module, score_args: ScoreArguments) -> None:
-    """Updates the score arguments for all `TrackedModule` instances within a model.
-
-    Args:
-        model (nn.Module):
-            The PyTorch model containing `TrackedModule` instances.
-        score_args (ScoreArguments):
-            The new score arguments to set.
-    """
-    for module in model.modules():
-        if isinstance(module, TrackedModule):
-            module.update_score_args(score_args=score_args)
-
-
 def get_tracked_module_names(model: nn.Module) -> List[str]:
     """Returns the names of `TrackedModule` instances within a model.
 
@@ -201,7 +184,7 @@ def get_tracked_module_names(model: nn.Module) -> List[str]:
 def load_factors(
     model: nn.Module,
     factor_name: str,
-    tracked_module_names: List[str] = None,
+    tracked_module_names: Optional[List[str]] = None,
     cpu: bool = True,
 ) -> Dict[str, torch.Tensor]:
     """Loads factors with the given name from specified `TrackedModule` instances.
@@ -235,7 +218,12 @@ def load_factors(
     return loaded_factors
 
 
-def set_factors(model: nn.Module, factor_name: str, factors: Dict[str, torch.Tensor], clone: bool = False) -> None:
+def set_factors(
+    model: nn.Module,
+    factor_name: str,
+    factors: Dict[str, torch.Tensor],
+    clone: bool = False,
+) -> None:
     """Sets new factors for all `TrackedModule` instances within a model.
 
     Args:
@@ -251,7 +239,8 @@ def set_factors(model: nn.Module, factor_name: str, factors: Dict[str, torch.Ten
     for module in model.modules():
         if isinstance(module, TrackedModule):
             module.set_factor(
-                factor_name=factor_name, factor=factors[module.name].clone() if clone else factors[module.name]
+                factor_name=factor_name,
+                factor=factors[module.name].clone() if clone else factors[module.name],
             )
 
 
@@ -301,22 +290,6 @@ def set_gradient_scale(
     for module in model.modules():
         if isinstance(module, TrackedModule):
             module.set_gradient_scale(scale=gradient_scale)
-
-
-def prepare_modules(model: nn.Module, tracked_module_names: List[str], device: torch.device) -> None:
-    """Prepares specified `TrackedModule` instances for score computation.
-
-    Args:
-        model (nn.Module):
-            The PyTorch model containing `TrackedModule` instances.
-        tracked_module_names (List[str]):
-            Names of modules to prepare.
-        device (torch.device):
-            The device to prepare the modules for.
-    """
-    for module in model.modules():
-        if isinstance(module, TrackedModule) and module.name in tracked_module_names:
-            module.prepare_storage(device=device)
 
 
 def synchronize_modules(model: nn.Module, tracked_module_names: List[str], num_processes: int = 1) -> None:

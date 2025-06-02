@@ -67,7 +67,7 @@ class Task(ABC):
         raise NotImplementedError(f"{self.__class__.__name__} must implement the `compute_measurement` method.")
 
     def get_influence_tracked_modules(self) -> Optional[List[str]]:
-        """Specifies which modules should be tracked for influence factor and score computations.
+        """Specifies which modules should be tracked for influence factor computations.
 
         Override this method in subclasses to return a list of specific module names if influence functions
         should only be computed for a subset of the model.

@@ -6,14 +6,14 @@ import torch
 
 FACTOR_TYPE = Dict[str, Dict[str, torch.Tensor]]
 PARTITION_TYPE = Tuple[int, int]
-SCORE_TYPE = Dict[str, torch.Tensor]
+
 PRECONDITIONED_GRADIENT_TYPE = Optional[Union[torch.Tensor, List[torch.Tensor]]]
 
 # Constants for file naming conventions.
 FACTOR_SAVE_PREFIX = "factors_"
-SCORE_SAVE_PREFIX = "scores_"
+
 FACTOR_ARGUMENTS_NAME = "factor"
-SCORE_ARGUMENTS_NAME = "score"
+
 
 # The total iteration step to synchronize the process when using distributed setting.
 DISTRIBUTED_SYNC_INTERVAL = 1_000
@@ -70,13 +70,7 @@ PRECONDITIONED_GRADIENT_NAME = "preconditioned_gradient"
 ACCUMULATED_PRECONDITIONED_GRADIENT_NAME = "accumulated_preconditioned_gradient"
 # Aggregated gradient.
 AGGREGATED_GRADIENT_NAME = "aggregated_gradient"
-# Pairwise influence scores.
-PAIRWISE_SCORE_MATRIX_NAME = "pairwise_score_matrix"
-# Self-influence scores.
-SELF_SCORE_VECTOR_NAME = "self_score_vector"
 
-# The dictionary key for storing summed scores.
-ALL_MODULE_NAME = "all_modules"
 
 # Data type when computing the reciprocal.
 LAMBDA_DTYPE = torch.float64

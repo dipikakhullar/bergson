@@ -3,7 +3,7 @@ import os
 import time
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Dict, Generator, List, Tuple
+from typing import Dict, Generator, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -12,7 +12,7 @@ import torch.profiler as t_prof
 from quelle.hessians.utils.state import State
 
 TQDM_BAR_FORMAT = (
-    "{desc} [{n_fmt}/{total_fmt}] {percentage:3.0f}%|{bar}{postfix} " "[time left: {remaining}, time spent: {elapsed}]"
+    "{desc} [{n_fmt}/{total_fmt}] {percentage:3.0f}%|{bar}{postfix} [time left: {remaining}, time spent: {elapsed}]"
 )
 
 _TABLE_ROW = Tuple[str, float, int, float, float]
@@ -32,7 +32,7 @@ class MultiProcessAdapter(logging.LoggerAdapter):
             self.logger.log(level, msg, *args, **kwargs)
 
 
-def get_logger(name: str, disable_log: bool = False, log_level: int = None) -> MultiProcessAdapter:
+def get_logger(name: str, disable_log: bool = False, log_level: Optional[int] = None) -> MultiProcessAdapter:
     """Creates and returns a logger with optional disabling and log level setting.
 
     Args:
@@ -87,7 +87,7 @@ class Profiler:
             return
         end_time = _get_monotonic_time()
         if action_name not in self.current_actions:
-            raise ValueError(f"Attempting to stop recording an action " f"({action_name}) which was never started.")
+            raise ValueError(f"Attempting to stop recording an action ({action_name}) which was never started.")
         start_time = self.current_actions.pop(action_name)
         duration = end_time - start_time
         self.recorded_durations[action_name].append(duration)
@@ -192,7 +192,7 @@ class TorchProfiler(Profiler):
 
     def stop(self, action_name: str) -> None:
         if action_name not in self.current_actions:
-            raise ValueError(f"Attempting to stop recording an action " f"({action_name}) which was never started.")
+            raise ValueError(f"Attempting to stop recording an action ({action_name}) which was never started.")
         _ = self.current_actions.pop(action_name)
         self._torch_prof.stop()
 
