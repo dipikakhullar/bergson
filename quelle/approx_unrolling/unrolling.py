@@ -5,10 +5,6 @@ import random
 import numpy as np
 import torch
 import torch.distributed as dist
-from kronfluence import Analyzer, prepare_model
-from kronfluence.arguments import FactorArguments
-from kronfluence.utils.common.factor_arguments import all_low_precision_factor_arguments
-from kronfluence.utils.dataset import DataLoaderKwargs
 from transformers import default_data_collator
 
 from quelle.approx_unrolling.build_index import build_index
@@ -16,6 +12,12 @@ from quelle.approx_unrolling.EK_FAC import compute_EK_FAC_checkpoints
 from quelle.approx_unrolling.language_task import LanguageModelingTask
 from quelle.approx_unrolling.model_checkpoints import PythiaCheckpoints
 from quelle.approx_unrolling.pile_data import get_pile_dataset
+from quelle.hessians import Analyzer, prepare_model
+from quelle.hessians.arguments import FactorArguments
+from quelle.hessians.utils.common.factor_arguments import (
+    all_low_precision_factor_arguments,
+)
+from quelle.hessians.utils.dataset import DataLoaderKwargs
 
 
 def parse_args():
@@ -116,7 +118,7 @@ def parse_args():
     return args
 
 
-def run_kronfluence():
+def run_hessians():
     args = parse_args()
 
     # all_checkpoints = [[2000, 3000, 4000], [6000]]
@@ -232,5 +234,5 @@ def run():
 if __name__ == "__main__":
     # run()
 
-    run_kronfluence()
+    run()
 # python unrolling.py --query_batch_size 32 --train_batch_size 64 --use_half_precision --per_device_batch_size 32 --pythia_model_name EleutherAI/pythia-70m

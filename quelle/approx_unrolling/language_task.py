@@ -2,8 +2,9 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from hessians.task import Task
 from torch import nn
+
+from quelle.hessians.task import Task
 
 BATCH_TYPE = Dict[str, torch.Tensor]
 

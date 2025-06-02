@@ -7,10 +7,6 @@ import shutil
 from typing import Dict
 
 import torch
-from hessians.analyzer import Analyzer, prepare_model
-from hessians.arguments import FactorArguments
-from hessians.utils.common.factor_arguments import all_low_precision_factor_arguments
-from hessians.utils.dataset import DataLoaderKwargs
 from language_task import LanguageModelingTask
 from safetensors.torch import load_file, save_file
 from torch.utils import data
@@ -22,6 +18,12 @@ from quelle.approx_unrolling.model_checkpoints import (
     ModelCheckpointManager,
 )
 from quelle.approx_unrolling.utils import TensorDict
+from quelle.hessians.analyzer import Analyzer, prepare_model
+from quelle.hessians.arguments import FactorArguments
+from quelle.hessians.utils.common.factor_arguments import (
+    all_low_precision_factor_arguments,
+)
+from quelle.hessians.utils.dataset import DataLoaderKwargs
 
 BATCH_TYPE = Dict[str, torch.Tensor]
 logger = get_logger(__name__)

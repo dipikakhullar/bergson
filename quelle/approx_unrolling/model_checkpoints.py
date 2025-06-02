@@ -170,9 +170,10 @@ class PythiaCheckpoints(ModelCheckpointManager):
         self,
         all_checkpoints: List[List[int]],
         model_name: str,
+        lr: Union[List[List[float]], float] = 1e-3,
     ):
         self.model_name = model_name
-        super().__init__(all_checkpoints, model_name)
+        super().__init__(all_checkpoints, model_name, lr)
 
     def load_models(self, checkpoint: int) -> torch.nn.Module:
         """
