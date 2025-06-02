@@ -23,6 +23,7 @@ class ModelCheckpointManager(ABC):
         self,
         all_checkpoints: List[List[int]],
         model_name: str,
+        lr: Union[List[List[float]], float],
         dir: Optional[Union[str, Path]] = None,
     ):
         """
@@ -38,6 +39,9 @@ class ModelCheckpointManager(ABC):
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.all_checkpoints = all_checkpoints
         self.module_keys = None
+        self.lr = lr
+        if isinstance(lr, int):
+            self.lr = [[lr] * len(segment) for segment in all_checkpoints]
 
     @abstractmethod
     def load_models(self, checkpoint: int, *args, **kwargs) -> torch.nn.Module:

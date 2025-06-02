@@ -2,7 +2,7 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from kronfluence.task import Task
+from hessians.task import Task
 from torch import nn
 
 BATCH_TYPE = Dict[str, torch.Tensor]

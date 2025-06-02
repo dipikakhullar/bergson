@@ -7,10 +7,10 @@ import shutil
 from typing import Dict
 
 import torch
-from kronfluence.analyzer import Analyzer, prepare_model
-from kronfluence.arguments import FactorArguments
-from kronfluence.utils.common.factor_arguments import all_low_precision_factor_arguments
-from kronfluence.utils.dataset import DataLoaderKwargs
+from hessians.analyzer import Analyzer, prepare_model
+from hessians.arguments import FactorArguments
+from hessians.utils.common.factor_arguments import all_low_precision_factor_arguments
+from hessians.utils.dataset import DataLoaderKwargs
 from language_task import LanguageModelingTask
 from safetensors.torch import load_file, save_file
 from torch.utils import data
@@ -65,7 +65,7 @@ def compute_EK_FAC(
     )
 
 
-def compute_EK_FAC_kronfluence(
+def compute_EK_FAC_hessians(
     model: torch.nn.Module,
     task: LanguageModelingTask,
     train_dataset: data.Dataset,
@@ -161,7 +161,7 @@ def compute_EK_FAC_checkpoints(
         #     factors_name=factors_name,
         # )
 
-        compute_EK_FAC_kronfluence(
+        compute_EK_FAC_hessians(
             model=loaded_checkpoint,
             output_dir=str(output_dir),
             task=task,
@@ -176,7 +176,6 @@ def compute_EK_FAC_checkpoints(
             + "-" * 50
         )
 
-    return
     compute_average_covariance(
         checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args
     )
@@ -429,7 +428,33 @@ def compute_lambda_matrices_average(
             segment_path / "lambda_matrix.safetensors",
         )
 
-    pass
+
+def compute_unrolled_lambdas(
+    checkpoint_manager: ModelCheckpointManager,
+    EK_FAC_args: argparse.Namespace,
+    device: str = "cuda",
+):
+    for i, segment in tqdm(enumerate(checkpoint_manager.all_checkpoints)):
+        segment_path = (
+            checkpoint_manager.model_dir
+            / f"segment_{i}"
+            / "influence_results"
+            / ("factors_ekfac" + ("_half" if EK_FAC_args.use_half_precision else ""))
+        )
+
+        lambda_matrix_path = segment_path / "lambda_matrix.safetensors"
+        lambda_matrix = TensorDict(load_file(lambda_matrix_path, device=device))
+
+        mean_lr = sum(checkpoint_manager.lr[i]) / len(checkpoint_manager.lr[i])  # type:ignore
+        segment_len = segment[-1] - segment[0]
+        unrolled_lambda = lambda_matrix._apply_unary(
+            lambda t: torch.exp(t * mean_lr * segment_len)
+        )
+
+        save_file(
+            unrolled_lambda.to_dict(),
+            segment_path / "unrolled_lambda_matrix.safetensors",
+        )
 
 
 def prepare_hessians(
