@@ -229,7 +229,7 @@ class Computer(ABC):
         } | dataloader_params
         return data.DataLoader(dataset=dataset, **dataloader_params)
 
-    def _configure_dataloader(self, dataloader_kwargs: DataLoaderKwargs) -> Dict[str, Any]:
+    def _configure_dataloader(self, dataloader_kwargs: Optional[DataLoaderKwargs]) -> Dict[str, Any]:
         """Configures the DataLoader, logging appropriate messages."""
         if dataloader_kwargs is None:
             dataloader_kwargs = self._dataloader_params

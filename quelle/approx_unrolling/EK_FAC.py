@@ -7,12 +7,12 @@ import shutil
 from typing import Dict
 
 import torch
-from language_task import LanguageModelingTask
 from safetensors.torch import load_file, save_file
 from torch.utils import data
 from tqdm import tqdm
 from transformers import default_data_collator
 
+from quelle.approx_unrolling.language_task import LanguageModelingTask
 from quelle.approx_unrolling.logger_config import get_logger
 from quelle.approx_unrolling.model_checkpoints import (
     ModelCheckpointManager,

@@ -135,15 +135,11 @@ def run_hessians():
 
     model = pythia_checkpoints_manager.load_checkpoint(checkpoint=1000)
     EK_FAC_args = args
-    train_dataset = get_pile_dataset(
-        model_str=args.pythia_model_name, step=0, max_samples=4000
-    )
+    train_dataset = get_pile_dataset(model_str=args.pythia_model_name, step=0, max_samples=4000)
     factors_name = args.factor_strategy
     factor_args = FactorArguments(strategy=EK_FAC_args.factor_strategy)  # type:ignore
     if EK_FAC_args.use_half_precision:
-        factor_args = all_low_precision_factor_arguments(
-            strategy=EK_FAC_args.factor_strategy, dtype=torch.bfloat16
-        )
+        factor_args = all_low_precision_factor_arguments(strategy=EK_FAC_args.factor_strategy, dtype=torch.bfloat16)
         factors_name += "_half"
     if EK_FAC_args.use_compile:
         factors_name += "_compile"
@@ -212,9 +208,7 @@ def run():
     task = LanguageModelingTask(module_keys=pythia_checkpoints_manager.module_keys)
     pythia_checkpoints_manager.module_keys = task.get_influence_tracked_modules()
 
-    train_dataset = get_pile_dataset(
-        model_str=args.pythia_model_name, step=0, max_samples=4000
-    )
+    train_dataset = get_pile_dataset(model_str=args.pythia_model_name, step=0, max_samples=4000)
 
     compute_EK_FAC_checkpoints(
         checkpoint_manager=pythia_checkpoints_manager,
@@ -235,4 +229,4 @@ if __name__ == "__main__":
     # run()
 
     run()
-# python unrolling.py --query_batch_size 32 --train_batch_size 64 --use_half_precision --per_device_batch_size 32 --pythia_model_name EleutherAI/pythia-70m
+# python unrolling.py --query_batch_size 32 --train_batch_size 64 --use_half_precision --per_device_batch_size 32 --pythia_model_name EleutherAI/pythia-14m

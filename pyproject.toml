@@ -14,7 +14,6 @@ dependencies = [
     "datasets",
     "ipykernel>=6.29.5",
     "ipywidgets>=8.1.7",
-    "kronfluence>=1.0.1",
     "torch",
     "transformers",
 ]
@@ -36,4 +35,4 @@ include = ["quelle*"]
 # See https://beta.ruff.rs/docs/rules/ for more possible rules
 lint.select = ["E", "F", "I"]
 # Same as Black.
-line-length = 88
+line-length = 120

@@ -43,9 +43,7 @@ class FactorComputer(Computer):
         """Configures and saves factor arguments to disk."""
         if factor_args is None:
             factor_args = FactorArguments()
-            self.logger.info(
-                f"Factor arguments not provided. Using the default configuration: {factor_args}."
-            )
+            self.logger.info(f"Factor arguments not provided. Using the default configuration: {factor_args}.")
         else:
             self.logger.info(f"Using the provided configuration: {factor_args}.")
 
@@ -76,17 +74,12 @@ class FactorComputer(Computer):
             self.logger.error(error_msg)
             raise FileNotFoundError(error_msg)
 
-        all_required_partitions = [
-            (i, j) for i in range(data_partitions) for j in range(module_partitions)
-        ]
+        all_required_partitions = [(i, j) for i in range(data_partitions) for j in range(module_partitions)]
         all_partition_exists = all(
-            exist_fnc(output_dir=factors_output_dir, partition=partition)
-            for partition in all_required_partitions
+            exist_fnc(output_dir=factors_output_dir, partition=partition) for partition in all_required_partitions
         )
         if not all_partition_exists:
-            self.logger.info(
-                "Factors are not aggregated as factors for some partitions are not yet computed."
-            )
+            self.logger.info("Factors are not aggregated as factors for some partitions are not yet computed.")
             return
 
         start_time = time.time()
@@ -103,15 +96,11 @@ class FactorComputer(Computer):
 
                     for module_name in factors:
                         if module_name not in aggregated_factors[factor_name]:
-                            aggregated_factors[factor_name][module_name] = (
-                                torch.zeros_like(
-                                    factors[module_name],
-                                    requires_grad=False,
-                                )
+                            aggregated_factors[factor_name][module_name] = torch.zeros_like(
+                                factors[module_name],
+                                requires_grad=False,
                             )
-                        aggregated_factors[factor_name][module_name].add_(
-                            factors[module_name]
-                        )
+                        aggregated_factors[factor_name][module_name].add_(factors[module_name])
                 del loaded_factors
         save_fnc(
             output_dir=factors_output_dir,
@@ -150,9 +139,7 @@ class FactorComputer(Computer):
         )
 
         def executable_batch_size_func(batch_size: int) -> None:
-            self.logger.info(
-                f"Attempting to set per-device batch size to {batch_size}."
-            )
+            self.logger.info(f"Attempting to set per-device batch size to {batch_size}.")
             # Releases all memory that could be caused by the previous OOM.
             self._reset_memory()
             total_batch_size = batch_size * self.state.num_processes
@@ -213,13 +200,8 @@ class FactorComputer(Computer):
 
         factors_output_dir = self.factors_output_dir(factors_name=factors_name)
         os.makedirs(factors_output_dir, exist_ok=True)
-        if (
-            covariance_matrices_exist(output_dir=factors_output_dir)
-            and not overwrite_output_dir
-        ):
-            self.logger.info(
-                f"Found existing covariance matrices at `{factors_output_dir}`. Skipping."
-            )
+        if covariance_matrices_exist(output_dir=factors_output_dir) and not overwrite_output_dir:
+            self.logger.info(f"Found existing covariance matrices at `{factors_output_dir}`. Skipping.")
             return
 
         factor_args = self._configure_and_save_factor_args(
@@ -246,20 +228,11 @@ class FactorComputer(Computer):
         if factor_args.covariance_max_examples is None:
             total_data_examples = len(dataset)
         else:
-            total_data_examples = min(
-                [factor_args.covariance_max_examples, len(dataset)]
-            )
-        self.logger.info(
-            f"Total data examples to fit covariance matrices: {total_data_examples}."
-        )
+            total_data_examples = min([factor_args.covariance_max_examples, len(dataset)])
+        self.logger.info(f"Total data examples to fit covariance matrices: {total_data_examples}.")
 
-        no_partition = (
-            factor_args.covariance_data_partitions == 1
-            and factor_args.covariance_module_partitions == 1
-        )
-        partition_provided = (
-            target_data_partitions is not None or target_module_partitions is not None
-        )
+        no_partition = factor_args.covariance_data_partitions == 1 and factor_args.covariance_module_partitions == 1
+        partition_provided = target_data_partitions is not None or target_module_partitions is not None
         if no_partition and partition_provided:
             error_msg = (
                 "`target_data_partitions` or `target_module_partitions` were specified, while"
@@ -273,9 +246,7 @@ class FactorComputer(Computer):
             data_partitions=factor_args.covariance_data_partitions,
             target_data_partitions=target_data_partitions,
         )
-        max_partition_examples = (
-            total_data_examples // factor_args.covariance_data_partitions
-        )
+        max_partition_examples = total_data_examples // factor_args.covariance_data_partitions
         module_partition_names, target_module_partitions = self._get_module_partition(
             module_partitions=factor_args.covariance_module_partitions,
             target_module_partitions=target_module_partitions,
@@ -319,9 +290,7 @@ class FactorComputer(Computer):
                         "state": self.state,
                         "task": self.task,
                         "factor_args": factor_args,
-                        "tracked_module_names": module_partition_names[
-                            module_partition
-                        ],
+                        "tracked_module_names": module_partition_names[module_partition],
                         "disable_tqdm": True,
                     }
                     per_device_batch_size = self._find_executable_factors_batch_size(
@@ -343,18 +312,14 @@ class FactorComputer(Computer):
                         indices=list(range(start_index, end_index)),
                         allow_duplicates=False,
                     )
-                    num_data_processed, covariance_factors = (
-                        fit_covariance_matrices_with_loader(
-                            model=self.model,
-                            state=self.state,
-                            task=self.task,
-                            loader=loader,
-                            factor_args=factor_args,
-                            tracked_module_names=module_partition_names[
-                                module_partition
-                            ],
-                            disable_tqdm=self.disable_tqdm,
-                        )
+                    num_data_processed, covariance_factors = fit_covariance_matrices_with_loader(
+                        model=self.model,
+                        state=self.state,
+                        task=self.task,
+                        loader=loader,
+                        factor_args=factor_args,
+                        tracked_module_names=module_partition_names[module_partition],
+                        disable_tqdm=self.disable_tqdm,
                     )
                 end_time = get_time(state=self.state)
                 elapsed_time = end_time - start_time
@@ -362,6 +327,9 @@ class FactorComputer(Computer):
                     f"Fitted covariance matrices with {num_data_processed.item()} data points in "
                     f"{elapsed_time:.2f} seconds."
                 )
+                self.logger.warning("-" * 50)
+                self.logger.warning("DEBUGGING covariance factors currently")
+                return covariance_factors
 
                 with self.profiler.profile("Save Covariance"):
                     if self.state.is_main_process:
@@ -372,23 +340,17 @@ class FactorComputer(Computer):
                             metadata=factor_args.to_str_dict(),
                         )
                     self.state.wait_for_everyone()
-                self.logger.info(
-                    f"Saved covariance matrices at `{factors_output_dir}`."
-                )
+                self.logger.info(f"Saved covariance matrices at `{factors_output_dir}`.")
                 del num_data_processed, covariance_factors, loader
                 self._reset_memory()
 
         all_end_time = get_time(state=self.state)
         elapsed_time = all_end_time - all_start_time
         if not no_partition:
-            self.logger.info(
-                f"Fitted all partitioned covariance matrices in {elapsed_time:.2f} seconds."
-            )
+            self.logger.info(f"Fitted all partitioned covariance matrices in {elapsed_time:.2f} seconds.")
             if self.state.is_main_process:
                 self.aggregate_covariance_matrices(factors_name=factors_name)
-                self.logger.info(
-                    f"Saved aggregated covariance matrices at `{factors_output_dir}`."
-                )
+                self.logger.info(f"Saved aggregated covariance matrices at `{factors_output_dir}`.")
             self.state.wait_for_everyone()
         self._log_profile_summary(name=f"factors_{factors_name}_covariance")
 
@@ -447,13 +409,8 @@ class FactorComputer(Computer):
 
         factors_output_dir = self.factors_output_dir(factors_name=factors_name)
         os.makedirs(factors_output_dir, exist_ok=True)
-        if (
-            eigendecomposition_exist(output_dir=factors_output_dir)
-            and not overwrite_output_dir
-        ):
-            self.logger.info(
-                f"Found existing eigendecomposition results at `{factors_output_dir}`. Skipping."
-            )
+        if eigendecomposition_exist(output_dir=factors_output_dir) and not overwrite_output_dir:
+            self.logger.info(f"Found existing eigendecomposition results at `{factors_output_dir}`. Skipping.")
             return
 
         factor_args = self._configure_and_save_factor_args(
@@ -470,12 +427,8 @@ class FactorComputer(Computer):
 
         load_factors_output_dir = factors_output_dir
         if load_from_factors_name is not None:
-            self.logger.info(
-                f"Will be loading covariance matrices from factors with name `{load_from_factors_name}`."
-            )
-            load_factors_output_dir = self.factors_output_dir(
-                factors_name=load_from_factors_name
-            )
+            self.logger.info(f"Will be loading covariance matrices from factors with name `{load_from_factors_name}`.")
+            load_factors_output_dir = self.factors_output_dir(factors_name=load_from_factors_name)
 
         if not covariance_matrices_exist(output_dir=load_factors_output_dir):
             error_msg = (
@@ -486,19 +439,13 @@ class FactorComputer(Computer):
             raise FactorsNotFoundError(error_msg)
 
         with self.profiler.profile("Load Covariance"):
-            covariance_factors = load_covariance_matrices(
-                output_dir=load_factors_output_dir
-            )
+            covariance_factors = load_covariance_matrices(output_dir=load_factors_output_dir)
 
         if load_from_factors_name is not None and self.state.is_main_process:
             # Save the loaded covariances to the current factor output directory.
             with self.profiler.profile("Save Covariance"):
-                save_covariance_matrices(
-                    output_dir=factors_output_dir, factors=covariance_factors
-                )
-            loaded_factor_args = self.load_factor_args(
-                factors_name=load_from_factors_name
-            )
+                save_covariance_matrices(output_dir=factors_output_dir, factors=covariance_factors)
+            loaded_factor_args = self.load_factor_args(factors_name=load_from_factors_name)
             self._save_arguments(
                 arguments_name=FACTOR_ARGUMENTS_NAME + "_loaded_covariance",
                 arguments=loaded_factor_args,
@@ -521,9 +468,7 @@ class FactorComputer(Computer):
                 )
             end_time = time.time()
             elapsed_time = end_time - start_time
-            self.logger.info(
-                f"Performed eigendecomposition in {elapsed_time:.2f} seconds."
-            )
+            self.logger.info(f"Performed eigendecomposition in {elapsed_time:.2f} seconds.")
 
             with self.profiler.profile("Save Eigendecomposition"):
                 save_eigendecomposition(
@@ -531,9 +476,7 @@ class FactorComputer(Computer):
                     factors=eigen_factors,
                     metadata=factor_args.to_str_dict(),
                 )
-            self.logger.info(
-                f"Saved eigendecomposition results at `{factors_output_dir}`."
-            )
+            self.logger.info(f"Saved eigendecomposition results at `{factors_output_dir}`.")
             del eigen_factors
             self._reset_memory()
         self.state.wait_for_everyone()
@@ -585,13 +528,8 @@ class FactorComputer(Computer):
 
         factors_output_dir = self.factors_output_dir(factors_name=factors_name)
         os.makedirs(factors_output_dir, exist_ok=True)
-        if (
-            lambda_matrices_exist(output_dir=factors_output_dir)
-            and not overwrite_output_dir
-        ):
-            self.logger.info(
-                f"Found existing Lambda matrices at `{factors_output_dir}`. Skipping."
-            )
+        if lambda_matrices_exist(output_dir=factors_output_dir) and not overwrite_output_dir:
+            self.logger.info(f"Found existing Lambda matrices at `{factors_output_dir}`. Skipping.")
             return
 
         factor_args = self._configure_and_save_factor_args(
@@ -601,9 +539,7 @@ class FactorComputer(Computer):
         )
 
         if not FactorConfig.CONFIGS[factor_args.strategy].requires_lambda_matrices:
-            self.logger.info(
-                f"Strategy `{factor_args.strategy}` does not require fitting Lambda matrices. Skipping."
-            )
+            self.logger.info(f"Strategy `{factor_args.strategy}` does not require fitting Lambda matrices. Skipping.")
             return
 
         dataloader_params = self._configure_dataloader(dataloader_kwargs)
@@ -619,9 +555,7 @@ class FactorComputer(Computer):
                 self.logger.info(
                     f"Will be loading eigendecomposition results from factors with name `{load_from_factors_name}`."
                 )
-                load_factors_output_dir = self.factors_output_dir(
-                    factors_name=load_from_factors_name
-                )
+                load_factors_output_dir = self.factors_output_dir(factors_name=load_from_factors_name)
             else:
                 load_factors_output_dir = factors_output_dir
         else:
@@ -632,9 +566,7 @@ class FactorComputer(Computer):
 
         if (
             not eigendecomposition_exist(output_dir=load_factors_output_dir)
-            and FactorConfig.CONFIGS[
-                factor_args.strategy
-            ].requires_eigendecomposition_for_lambda
+            and FactorConfig.CONFIGS[factor_args.strategy].requires_eigendecomposition_for_lambda
         ):
             error_msg = (
                 f"Eigendecomposition results not found at `{load_factors_output_dir}`. "
@@ -645,21 +577,13 @@ class FactorComputer(Computer):
             raise FactorsNotFoundError(error_msg)
 
         eigen_factors = None
-        if FactorConfig.CONFIGS[
-            factor_args.strategy
-        ].requires_eigendecomposition_for_lambda:
+        if FactorConfig.CONFIGS[factor_args.strategy].requires_eigendecomposition_for_lambda:
             with self.profiler.profile("Load Eigendecomposition"):
-                eigen_factors = load_eigendecomposition(
-                    output_dir=load_factors_output_dir
-                )
+                eigen_factors = load_eigendecomposition(output_dir=load_factors_output_dir)
             if load_from_factors_name is not None and self.state.is_main_process:
                 with self.profiler.profile("Save Eigendecomposition"):
-                    save_eigendecomposition(
-                        output_dir=factors_output_dir, factors=eigen_factors
-                    )
-                loaded_factor_args = self.load_factor_args(
-                    factors_name=load_from_factors_name
-                )
+                    save_eigendecomposition(output_dir=factors_output_dir, factors=eigen_factors)
+                loaded_factor_args = self.load_factor_args(factors_name=load_from_factors_name)
                 self._save_arguments(
                     arguments_name=FACTOR_ARGUMENTS_NAME + "_loaded_eigendecomposition",
                     arguments=loaded_factor_args,
@@ -672,17 +596,10 @@ class FactorComputer(Computer):
             total_data_examples = len(dataset)
         else:
             total_data_examples = min([factor_args.lambda_max_examples, len(dataset)])
-        self.logger.info(
-            f"Total data examples to fit Lambda matrices: {total_data_examples}."
-        )
+        self.logger.info(f"Total data examples to fit Lambda matrices: {total_data_examples}.")
 
-        no_partition = (
-            factor_args.lambda_data_partitions == 1
-            and factor_args.lambda_module_partitions == 1
-        )
-        partition_provided = (
-            target_data_partitions is not None or target_module_partitions is not None
-        )
+        no_partition = factor_args.lambda_data_partitions == 1 and factor_args.lambda_module_partitions == 1
+        partition_provided = target_data_partitions is not None or target_module_partitions is not None
         if no_partition and partition_provided:
             error_msg = (
                 "`target_data_partitions` or `target_module_partitions` were specified, while"
@@ -696,9 +613,7 @@ class FactorComputer(Computer):
             data_partitions=factor_args.lambda_data_partitions,
             target_data_partitions=target_data_partitions,
         )
-        max_partition_examples = (
-            total_data_examples // factor_args.lambda_data_partitions
-        )
+        max_partition_examples = total_data_examples // factor_args.lambda_data_partitions
         module_partition_names, target_module_partitions = self._get_module_partition(
             module_partitions=factor_args.lambda_module_partitions,
             target_module_partitions=target_module_partitions,
@@ -743,9 +658,7 @@ class FactorComputer(Computer):
                         "state": self.state,
                         "task": self.task,
                         "factor_args": factor_args,
-                        "tracked_module_names": module_partition_names[
-                            module_partition
-                        ],
+                        "tracked_module_names": module_partition_names[module_partition],
                         "disable_tqdm": True,
                     }
                     per_device_batch_size = self._find_executable_factors_batch_size(
@@ -767,19 +680,15 @@ class FactorComputer(Computer):
                         indices=list(range(start_index, end_index)),
                         allow_duplicates=False,
                     )
-                    num_data_processed, lambda_factors = (
-                        fit_lambda_matrices_with_loader(
-                            eigen_factors=eigen_factors,
-                            model=self.model,
-                            state=self.state,
-                            task=self.task,
-                            loader=loader,
-                            factor_args=factor_args,
-                            tracked_module_names=module_partition_names[
-                                module_partition
-                            ],
-                            disable_tqdm=self.disable_tqdm,
-                        )
+                    num_data_processed, lambda_factors = fit_lambda_matrices_with_loader(
+                        eigen_factors=eigen_factors,
+                        model=self.model,
+                        state=self.state,
+                        task=self.task,
+                        loader=loader,
+                        factor_args=factor_args,
+                        tracked_module_names=module_partition_names[module_partition],
+                        disable_tqdm=self.disable_tqdm,
                     )
                 end_time = get_time(state=self.state)
                 elapsed_time = end_time - start_time
@@ -804,14 +713,10 @@ class FactorComputer(Computer):
         all_end_time = get_time(state=self.state)
         elapsed_time = all_end_time - all_start_time
         if not no_partition:
-            self.logger.info(
-                f"Fitted all partitioned Lambda matrices in {elapsed_time:.2f} seconds."
-            )
+            self.logger.info(f"Fitted all partitioned Lambda matrices in {elapsed_time:.2f} seconds.")
             if self.state.is_main_process:
                 self.aggregate_lambda_matrices(factors_name=factors_name)
-                self.logger.info(
-                    f"Saved aggregated Lambda matrices at `{factors_output_dir}`."
-                )
+                self.logger.info(f"Saved aggregated Lambda matrices at `{factors_output_dir}`.")
             self.state.wait_for_everyone()
         self._log_profile_summary(name=f"factors_{factors_name}_lambda")
 
