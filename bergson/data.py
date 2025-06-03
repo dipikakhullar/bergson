@@ -43,10 +43,20 @@ def pad_and_tensor(
     padding_value: int = 0,
     dtype: torch.dtype | None = torch.long,
     device: torch.device | None = None,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Pad a list of sequences to the same length and convert them to tensors.
+    Returns a tuple of padded sequences and labels. The labels are the same as the
+    sequences, but with -100 for the padding positions, which is useful for ignoring
+    padding in loss calculations.
+    """
     # find max length
     max_len = max(len(seq) for seq in sequences)
     # pad each sequence
     padded = [seq + [padding_value] * (max_len - len(seq)) for seq in sequences]
+    labels = [seq + [-100] * (max_len - len(seq)) for seq in sequences]
+
     # convert to tensor
-    return torch.tensor(padded, dtype=dtype, device=device)
+    padded_tokens = torch.tensor(padded, dtype=dtype, device=device)
+    padded_labels = torch.tensor(labels, dtype=dtype, device=device)
+    return padded_tokens, padded_labels

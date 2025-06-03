@@ -3,8 +3,8 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "quelle"
-description = "Tracing the Quelle (source) of neural net behaviors with data attribution"
+name = "bergson"
+description = "Tracing the memory of neural nets with data attribution"
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["interpretability", "explainable-ai"]
@@ -24,11 +24,11 @@ dev = [
 ]
 
 [tool.pyright]
-include = ["quelle*"]
+include = ["bergson*"]
 reportPrivateImportUsage = false
 
 [tool.setuptools.packages.find]
-include = ["quelle*"]
+include = ["bergson*"]
 
 [tool.ruff]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes

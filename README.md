@@ -1,2 +1,2 @@
-# quelle
-Tracing the Quelle (source) of neural net behaviors with data attribution
+# Bergson
+Tracing the memory of neural nets with data attribution
