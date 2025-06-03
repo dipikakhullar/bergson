@@ -4,7 +4,7 @@ import torch
 from einops import rearrange
 from torch import nn
 
-from quelle.hessians.module.tracked_module import TrackedModule
+from bergson.hessians.module.tracked_module import TrackedModule
 
 
 class TrackedLinear(TrackedModule, module_type=nn.Linear):

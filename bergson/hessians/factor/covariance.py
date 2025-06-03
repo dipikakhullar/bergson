@@ -10,9 +10,9 @@ from torch.amp import GradScaler
 from torch.utils import data
 from tqdm import tqdm
 
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.module.tracked_module import ModuleMode
-from quelle.hessians.module.utils import (
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.module.tracked_module import ModuleMode
+from bergson.hessians.module.utils import (
     get_tracked_module_names,
     load_factors,
     set_attention_mask,
@@ -21,15 +21,15 @@ from quelle.hessians.module.utils import (
     synchronize_modules,
     update_factor_args,
 )
-from quelle.hessians.task import Task
-from quelle.hessians.utils.constants import (
+from bergson.hessians.task import Task
+from bergson.hessians.utils.constants import (
     COVARIANCE_FACTOR_NAMES,
     DISTRIBUTED_SYNC_INTERVAL,
     FACTOR_TYPE,
     PARTITION_TYPE,
 )
-from quelle.hessians.utils.logger import TQDM_BAR_FORMAT
-from quelle.hessians.utils.state import State, no_sync
+from bergson.hessians.utils.logger import TQDM_BAR_FORMAT
+from bergson.hessians.utils.state import State, no_sync
 
 
 def covariance_matrices_save_path(

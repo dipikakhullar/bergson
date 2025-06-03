@@ -8,12 +8,12 @@ from safetensors.torch import save_file
 from torch import nn
 from torch.utils import data
 
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.computer.factor_computer import FactorComputer
-from quelle.hessians.module.utils import wrap_tracked_modules
-from quelle.hessians.task import Task
-from quelle.hessians.utils.dataset import DataLoaderKwargs
-from quelle.hessians.utils.save import load_file, verify_models_equivalence
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.computer.factor_computer import FactorComputer
+from bergson.hessians.module.utils import wrap_tracked_modules
+from bergson.hessians.task import Task
+from bergson.hessians.utils.dataset import DataLoaderKwargs
+from bergson.hessians.utils.save import load_file, verify_models_equivalence
 
 
 def prepare_model(

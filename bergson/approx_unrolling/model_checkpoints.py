@@ -8,7 +8,7 @@ import torch
 from safetensors.torch import load_file
 from transformers import GPTNeoXForCausalLM
 
-from quelle.approx_unrolling.logger_config import get_logger
+from bergson.approx_unrolling.logger_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -76,9 +76,7 @@ class ModelCheckpointManager(ABC):
 
             if checkpoint_path.exists():
                 if overwrite:
-                    logger.warning(
-                        f"Checkpoint {checkpoint_path} already exists. Overwriting..."
-                    )
+                    logger.warning(f"Checkpoint {checkpoint_path} already exists. Overwriting...")
                     shutil.rmtree(checkpoint_path)
                     checkpoint_path.mkdir(parents=True, exist_ok=True)
                 else:
@@ -124,9 +122,7 @@ class ModelCheckpointManager(ABC):
             logger.error(f"Failed to load model from {model_checkpoint_dir}: {e}")
             raise
 
-    def load_cache(
-        self, segment: int, device: str = "cpu"
-    ) -> Dict[str, Dict[str, torch.Tensor]]:
+    def load_cache(self, segment: int, device: str = "cpu") -> Dict[str, Dict[str, torch.Tensor]]:
         """
         Load a model from a specific checkpoint.
 
@@ -144,12 +140,7 @@ class ModelCheckpointManager(ABC):
             "lambda_matrix",
         ]
 
-        segment_path = (
-            self.model_dir
-            / f"segment_{segment}"
-            / "influence_results"
-            / "factors_ekfac_half"
-        )
+        segment_path = self.model_dir / f"segment_{segment}" / "influence_results" / "factors_ekfac_half"
 
         cache_dict = {}
 

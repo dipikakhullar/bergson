@@ -7,17 +7,17 @@ import torch
 import torch.distributed as dist
 from transformers import default_data_collator
 
-from quelle.approx_unrolling.build_index import build_index
-from quelle.approx_unrolling.EK_FAC import compute_EK_FAC_checkpoints
-from quelle.approx_unrolling.language_task import LanguageModelingTask
-from quelle.approx_unrolling.model_checkpoints import PythiaCheckpoints
-from quelle.approx_unrolling.pile_data import get_pile_dataset
-from quelle.hessians import Analyzer, prepare_model
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.utils.common.factor_arguments import (
+from bergson.approx_unrolling.build_index import build_index
+from bergson.approx_unrolling.EK_FAC import compute_EK_FAC_checkpoints
+from bergson.approx_unrolling.language_task import LanguageModelingTask
+from bergson.approx_unrolling.model_checkpoints import PythiaCheckpoints
+from bergson.approx_unrolling.pile_data import get_pile_dataset
+from bergson.hessians import Analyzer, prepare_model
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.utils.common.factor_arguments import (
     all_low_precision_factor_arguments,
 )
-from quelle.hessians.utils.dataset import DataLoaderKwargs
+from bergson.hessians.utils.dataset import DataLoaderKwargs
 
 
 def parse_args():

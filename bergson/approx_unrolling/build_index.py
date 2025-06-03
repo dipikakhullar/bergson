@@ -13,8 +13,8 @@ from torch import Tensor
 from torch.utils.hooks import RemovableHandle
 from tqdm.auto import trange
 
-from quelle.approx_unrolling.model_checkpoints import ModelCheckpointManager
-from quelle.data import MemmapDataset
+from bergson.approx_unrolling.model_checkpoints import ModelCheckpointManager
+from bergson.data import MemmapDataset
 
 
 class Normalizer(ABC):
@@ -111,9 +111,7 @@ class AdamNormalizer(Normalizer):
         and the factored second moments.
         """
         # We assume avg_sq is a square matrix of shape [O, I]
-        assert self.avg_sq.ndim == 2, (
-            f"Expected 2D tensor for avg_sq, got {self.avg_sq.ndim}D"
-        )
+        assert self.avg_sq.ndim == 2, f"Expected 2D tensor for avg_sq, got {self.avg_sq.ndim}D"
 
         # Compute row and column means
         return AdafactorNormalizer(
@@ -172,9 +170,7 @@ def build_index(
                     activation_covariance=activation_covariance,
                     gradient_covariance=gradient_covariance,
                 ) as mgr:
-                    x = torch.tensor(
-                        batch["input_ids"], dtype=torch.long, device="cuda"
-                    )
+                    x = torch.tensor(batch["input_ids"], dtype=torch.long, device="cuda")
                     y = torch.tensor(batch["labels"], dtype=torch.long, device="cuda")
                     model(x, labels=y).loss.backward()
                     model.zero_grad()
@@ -200,9 +196,7 @@ def build_index(
                         print(f"RAM available: {ram / 2**30:.2f} GB")
                         print(f"Grad dimension: {grads.shape[1]}")
                         if chunk_size < num_examples:
-                            print(
-                                f"Conservatively using chunk size of {chunk_size:_} examples"
-                            )
+                            print(f"Conservatively using chunk size of {chunk_size:_} examples")
 
                 index.add(grads.cpu().float().numpy())  # type: ignore
 
@@ -287,9 +281,7 @@ class GradientCollector(ContextDecorator):
     def __enter__(self):
         # install a hook on every Linear
 
-        assert self.checkpoint_manager.module_keys is not None, (
-            "Module keys must be set in the checkpoint manager."
-        )
+        assert self.checkpoint_manager.module_keys is not None, "Module keys must be set in the checkpoint manager."
         for (
             name,
             layer,
@@ -305,12 +297,8 @@ class GradientCollector(ContextDecorator):
             layer._name = name  # type: ignore[attr-defined]
 
             layer._lambda = self.lambda_eigenvalues[name].to(layer.weight.device)
-            layer._activation_eigenvectors = self.activation_covariance[name].to(
-                layer.weight.device
-            )
-            layer._gradient_eigenvectors = self.gradient_covariance[name].to(
-                layer.weight.device
-            )
+            layer._activation_eigenvectors = self.activation_covariance[name].to(layer.weight.device)
+            layer._gradient_eigenvectors = self.gradient_covariance[name].to(layer.weight.device)
 
             # register forward hook to save V = X @ B^T
             fwd_hook = layer.register_forward_hook(self._save_input)
@@ -371,9 +359,7 @@ class GradientCollector(ContextDecorator):
                 print(
                     f"{G.shape}, {module._gradient_eigenvectors.shape}, {module._activation_eigenvectors.shape}, {module._lambda.shape} "
                 )
-                raise RuntimeError(
-                    f"Error transforming gradients for layer {module._name}: {e}"
-                )
+                raise RuntimeError(f"Error transforming gradients for layer {module._name}: {e}")
 
         # Store the transformed gradients
         # Shape is [N, O, I] or [N, O, I] after transformation

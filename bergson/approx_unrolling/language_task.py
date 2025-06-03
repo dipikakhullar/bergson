@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from quelle.hessians.task import Task
+from bergson.hessians.task import Task
 
 BATCH_TYPE = Dict[str, torch.Tensor]
 
@@ -75,9 +75,7 @@ class LanguageModelingTask(Task):
         for m in self.module_keys:
             if any(x in m.lower() for x in ["dropout", "layernorm", "act"]):
                 continue
-            if (
-                "attention." in m.lower() or "attn." in m.lower()
-            ) and self.track_attention:
+            if ("attention." in m.lower() or "attn." in m.lower()) and self.track_attention:
                 total_modules.append(m)
             if "mlp." in m.lower() and self.track_mlp:
                 total_modules.append(m)

@@ -1,6 +1,6 @@
 import torch
 
-from quelle.hessians import FactorArguments
+from bergson.hessians import FactorArguments
 
 
 def default_factor_arguments(strategy: str = "ekfac") -> FactorArguments:
@@ -33,9 +33,7 @@ def smart_low_precision_factor_arguments(
     return factor_args
 
 
-def all_low_precision_factor_arguments(
-    strategy: str = "ekfac", dtype: torch.dtype = torch.bfloat16
-) -> FactorArguments:
+def all_low_precision_factor_arguments(strategy: str = "ekfac", dtype: torch.dtype = torch.bfloat16) -> FactorArguments:
     """Creates factor arguments with low precision for all computations."""
     factor_args = FactorArguments(strategy=strategy)
     factor_args.amp_dtype = dtype
@@ -46,9 +44,7 @@ def all_low_precision_factor_arguments(
     return factor_args
 
 
-def reduce_memory_factor_arguments(
-    strategy: str = "ekfac", dtype: torch.dtype = torch.bfloat16
-) -> FactorArguments:
+def reduce_memory_factor_arguments(strategy: str = "ekfac", dtype: torch.dtype = torch.bfloat16) -> FactorArguments:
     """Creates factor arguments with low precision and iterative lambda aggregations."""
     factor_args = all_low_precision_factor_arguments(strategy=strategy, dtype=dtype)
     factor_args.use_iterative_lambda_aggregation = True

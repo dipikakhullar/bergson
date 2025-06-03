@@ -5,9 +5,15 @@ import torch
 import torch.distributed as dist
 from accelerate.utils import find_batch_size, send_to_device
 from accelerate.utils.memory import should_reduce_batch_size
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.module.tracked_module import ModuleMode
-from quelle.hessians.module.utils import (
+from safetensors.torch import load_file, save_file
+from torch import autocast, nn
+from torch.amp import GradScaler
+from torch.utils import data
+from tqdm import tqdm
+
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.module.tracked_module import ModuleMode
+from bergson.hessians.module.utils import (
     finalize_iteration,
     get_tracked_module_names,
     load_factors,
@@ -17,8 +23,8 @@ from quelle.hessians.module.utils import (
     synchronize_modules,
     update_factor_args,
 )
-from quelle.hessians.task import Task
-from quelle.hessians.utils.constants import (
+from bergson.hessians.task import Task
+from bergson.hessians.utils.constants import (
     ACTIVATION_COVARIANCE_MATRIX_NAME,
     ACTIVATION_EIGENVALUES_NAME,
     ACTIVATION_EIGENVECTORS_NAME,
@@ -33,13 +39,8 @@ from quelle.hessians.utils.constants import (
     NUM_GRADIENT_COVARIANCE_PROCESSED,
     PARTITION_TYPE,
 )
-from quelle.hessians.utils.logger import TQDM_BAR_FORMAT
-from quelle.hessians.utils.state import State, no_sync, release_memory
-from safetensors.torch import load_file, save_file
-from torch import autocast, nn
-from torch.amp import GradScaler
-from torch.utils import data
-from tqdm import tqdm
+from bergson.hessians.utils.logger import TQDM_BAR_FORMAT
+from bergson.hessians.utils.state import State, no_sync, release_memory
 
 
 def eigendecomposition_save_path(
@@ -66,9 +67,7 @@ def eigendecomposition_save_path(
     return output_dir / f"{factor_name}.safetensors"
 
 
-def save_eigendecomposition(
-    output_dir: Path, factors: FACTOR_TYPE, metadata: Optional[Dict[str, str]] = None
-) -> None:
+def save_eigendecomposition(output_dir: Path, factors: FACTOR_TYPE, metadata: Optional[Dict[str, str]] = None) -> None:
     """Saves eigendecomposition results to disk.
 
     Args:
@@ -202,11 +201,7 @@ def perform_eigendecomposition(
                     dtype=factor_args.eigendecomposition_dtype,
                 )
                 # Normalize covariance matrices.
-                covariance_matrix.div_(
-                    covariance_factors[num_processed_name][module_name].to(
-                        device=state.device
-                    )
-                )
+                covariance_matrix.div_(covariance_factors[num_processed_name][module_name].to(device=state.device))
                 # In cases where covariance matrices are not exactly symmetric due to numerical issues.
                 covariance_matrix = covariance_matrix + covariance_matrix.t()
                 covariance_matrix.mul_(0.5)
@@ -221,11 +216,11 @@ def perform_eigendecomposition(
                     else:
                         raise
                 del covariance_matrix
-                eigen_factors[eigenvalues_name][module_name] = (
-                    eigenvalues.contiguous().to(dtype=original_dtype, device="cpu")
+                eigen_factors[eigenvalues_name][module_name] = eigenvalues.contiguous().to(
+                    dtype=original_dtype, device="cpu"
                 )
-                eigen_factors[eigenvectors_name][module_name] = (
-                    eigenvectors.contiguous().to(dtype=original_dtype, device="cpu")
+                eigen_factors[eigenvectors_name][module_name] = eigenvectors.contiguous().to(
+                    dtype=original_dtype, device="cpu"
                 )
                 del eigenvalues, eigenvectors
 
@@ -399,17 +394,13 @@ def fit_lambda_matrices_with_loader(
     )
     if eigen_factors is not None:
         for name in eigen_factors:
-            set_factors(
-                model=model, factor_name=name, factors=eigen_factors[name], clone=True
-            )
+            set_factors(model=model, factor_name=name, factors=eigen_factors[name], clone=True)
 
     total_steps = 0
     num_data_processed = torch.zeros((1,), dtype=torch.int64, requires_grad=False)
     enable_amp = factor_args.amp_dtype is not None
     enable_grad_scaler = enable_amp and factor_args.amp_dtype == torch.float16
-    scaler = GradScaler(
-        device="cuda", init_scale=factor_args.amp_scale, enabled=enable_grad_scaler
-    )
+    scaler = GradScaler(device="cuda", init_scale=factor_args.amp_scale, enabled=enable_grad_scaler)
     if enable_grad_scaler:
         gradient_scale = 1.0 / scaler.get_scale()
         set_gradient_scale(model=model, gradient_scale=gradient_scale)
@@ -438,9 +429,7 @@ def fit_lambda_matrices_with_loader(
                 scaler.scale(loss).backward()
 
             if factor_args.has_shared_parameters:
-                finalize_iteration(
-                    model=model, tracked_module_names=tracked_module_names
-                )
+                finalize_iteration(model=model, tracked_module_names=tracked_module_names)
 
             if (
                 state.use_distributed

@@ -12,18 +12,18 @@ from torch.utils import data
 from tqdm import tqdm
 from transformers import default_data_collator
 
-from quelle.approx_unrolling.language_task import LanguageModelingTask
-from quelle.approx_unrolling.logger_config import get_logger
-from quelle.approx_unrolling.model_checkpoints import (
+from bergson.approx_unrolling.language_task import LanguageModelingTask
+from bergson.approx_unrolling.logger_config import get_logger
+from bergson.approx_unrolling.model_checkpoints import (
     ModelCheckpointManager,
 )
-from quelle.approx_unrolling.utils import TensorDict
-from quelle.hessians.analyzer import Analyzer, prepare_model
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.utils.common.factor_arguments import (
+from bergson.approx_unrolling.utils import TensorDict
+from bergson.hessians.analyzer import Analyzer, prepare_model
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.utils.common.factor_arguments import (
     all_low_precision_factor_arguments,
 )
-from quelle.hessians.utils.dataset import DataLoaderKwargs
+from bergson.hessians.utils.dataset import DataLoaderKwargs
 
 BATCH_TYPE = Dict[str, torch.Tensor]
 logger = get_logger(__name__)
@@ -118,40 +118,26 @@ def compute_EK_FAC_checkpoints(
     factors_name = EK_FAC_args.factor_strategy
     factor_args = FactorArguments(strategy=EK_FAC_args.factor_strategy)  # type:ignore
     if EK_FAC_args.use_half_precision:
-        factor_args = all_low_precision_factor_arguments(
-            strategy=EK_FAC_args.factor_strategy, dtype=torch.bfloat16
-        )
+        factor_args = all_low_precision_factor_arguments(strategy=EK_FAC_args.factor_strategy, dtype=torch.bfloat16)
         factors_name += "_half"
     if EK_FAC_args.use_compile:
         factors_name += "_compile"
 
     # Check if the model directory exists
     if not os.path.exists(checkpoint_manager.model_dir):
-        raise FileNotFoundError(
-            f"Model directory {checkpoint_manager.model_dir} does not exist."
-        )
+        raise FileNotFoundError(f"Model directory {checkpoint_manager.model_dir} does not exist.")
 
     for checkpoint in itertools.chain(*checkpoint_manager.all_checkpoints):
-        checkpoint_path = (
-            checkpoint_manager.model_dir / f"checkpoint_{checkpoint}" / "model.pt"
-        )
+        checkpoint_path = checkpoint_manager.model_dir / f"checkpoint_{checkpoint}" / "model.pt"
         # Check if the checkpoint file exists
         if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(
-                f"Checkpoint file {checkpoint_path} does not exist."
-            )
+            raise FileNotFoundError(f"Checkpoint file {checkpoint_path} does not exist.")
 
         # Load the model from the checkpoint
 
-        loaded_checkpoint = checkpoint_manager.load_checkpoint(
-            checkpoint, device=device
-        )
+        loaded_checkpoint = checkpoint_manager.load_checkpoint(checkpoint, device=device)
 
-        output_dir = (
-            checkpoint_manager.model_dir
-            / f"checkpoint_{checkpoint}"
-            / "influence_results"
-        )
+        output_dir = checkpoint_manager.model_dir / f"checkpoint_{checkpoint}" / "influence_results"
 
         # compute_EK_FAC(
         #     model=loaded_checkpoint,
@@ -173,18 +159,11 @@ def compute_EK_FAC_checkpoints(
             factors_name=factors_name,
         )
 
-        logger.info(
-            f"Computed EK-FAC for checkpoint {checkpoint} and saved to {output_dir} \n"
-            + "-" * 50
-        )
+        logger.info(f"Computed EK-FAC for checkpoint {checkpoint} and saved to {output_dir} \n" + "-" * 50)
 
-    compute_average_covariance(
-        checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args
-    )
+    compute_average_covariance(checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args)
 
-    compute_eigendecomposition(
-        checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args
-    )
+    compute_eigendecomposition(checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args)
 
     compute_lambda_matrices(
         checkpoint_manager=checkpoint_manager,
@@ -195,14 +174,10 @@ def compute_EK_FAC_checkpoints(
         train_dataset=train_dataset,
     )
 
-    compute_lambda_matrices_average(
-        checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args
-    )
+    compute_lambda_matrices_average(checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args)
 
 
-def compute_average_covariance(
-    checkpoint_manager: ModelCheckpointManager, EK_FAC_args: argparse.Namespace
-):
+def compute_average_covariance(checkpoint_manager: ModelCheckpointManager, EK_FAC_args: argparse.Namespace):
     """Computes the average covariance matrices bar{A} and bar{S} for each segment of checkpoints."""
 
     factor_half = "_half" if EK_FAC_args.use_half_precision else ""
@@ -244,10 +219,7 @@ def compute_average_covariance(
             )
 
         segment_path = (
-            checkpoint_manager.model_dir
-            / f"segment_{i}"
-            / "influence_results"
-            / ("factors_ekfac" + factor_half)
+            checkpoint_manager.model_dir / f"segment_{i}" / "influence_results" / ("factors_ekfac" + factor_half)
         )
         segment_path.mkdir(parents=True, exist_ok=True)
         average_activation = sum(activations) / len(segment)
@@ -284,10 +256,7 @@ def compute_eigendecomposition(
     factor_half = "_half" if EK_FAC_args.use_half_precision else ""
     for i, segment in tqdm(enumerate(checkpoint_manager.all_checkpoints)):
         segment_path = (
-            checkpoint_manager.model_dir
-            / f"segment_{i}"
-            / "influence_results"
-            / ("factors_ekfac" + factor_half)
+            checkpoint_manager.model_dir / f"segment_{i}" / "influence_results" / ("factors_ekfac" + factor_half)
         )
         num_path = segment_path / "num_covariance_processed.safetensors"
         for type in ["activation", "gradient"]:
@@ -320,9 +289,7 @@ def compute_eigendecomposition(
                 eigenvalue_factors,
                 segment_path / f"{type}_eigenvalues.safetensors",
             )
-            save_file(
-                eigenvector_factors, segment_path / f"{type}_eigenvectors.safetensors"
-            )
+            save_file(eigenvector_factors, segment_path / f"{type}_eigenvectors.safetensors")
             del eigenvalue_factors, eigenvector_factors
             gc.collect()
             torch.compiler.reset()
@@ -346,17 +313,13 @@ def compute_lambda_matrices(
 
     for i, segment in enumerate(checkpoint_manager.all_checkpoints):
         for checkpoint in segment:
-            model = checkpoint_manager.load_checkpoint(
-                checkpoint=checkpoint, device=device
-            )
+            model = checkpoint_manager.load_checkpoint(checkpoint=checkpoint, device=device)
             model = prepare_model(model, task)
 
             if EK_FAC_args.use_compile:
                 model = torch.compile(model)  # type: ignore
 
-            result_output_dir = (
-                checkpoint_manager.model_dir / f"checkpoint_{checkpoint}" / output_dir
-            )
+            result_output_dir = checkpoint_manager.model_dir / f"checkpoint_{checkpoint}" / output_dir
 
             analyzer = Analyzer(
                 analysis_name="",
@@ -373,10 +336,7 @@ def compute_lambda_matrices(
                 checkpoint_manager.model_dir
                 / f"segment_{i}"
                 / "influence_results"
-                / (
-                    "factors_ekfac"
-                    + ("_half" if EK_FAC_args.use_half_precision else "")
-                )
+                / ("factors_ekfac" + ("_half" if EK_FAC_args.use_half_precision else ""))
             )
 
             analyzer.fit_lambda_matrices(
@@ -411,10 +371,7 @@ def compute_lambda_matrices_average(
                 checkpoint_manager.model_dir
                 / f"checkpoint_{checkpoint}"
                 / "influence_results"
-                / (
-                    "factors_ekfac"
-                    + ("_half" if EK_FAC_args.use_half_precision else "")
-                )
+                / ("factors_ekfac" + ("_half" if EK_FAC_args.use_half_precision else ""))
                 / "lambda_matrix.safetensors"
             )
 
@@ -449,9 +406,7 @@ def compute_unrolled_lambdas(
 
         mean_lr = sum(checkpoint_manager.lr[i]) / len(checkpoint_manager.lr[i])  # type:ignore
         segment_len = segment[-1] - segment[0]
-        unrolled_lambda = lambda_matrix._apply_unary(
-            lambda t: torch.exp(t * mean_lr * segment_len)
-        )
+        unrolled_lambda = lambda_matrix._apply_unary(lambda t: torch.exp(t * mean_lr * segment_len))
 
         save_file(
             unrolled_lambda.to_dict(),

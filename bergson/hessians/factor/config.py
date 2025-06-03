@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 import torch
 from accelerate.utils.dataclasses import BaseEnum
 
-from quelle.hessians.utils.constants import (
+from bergson.hessians.utils.constants import (
     ACTIVATION_EIGENVECTORS_NAME,
     GRADIENT_EIGENVECTORS_NAME,
     LAMBDA_MATRIX_NAME,

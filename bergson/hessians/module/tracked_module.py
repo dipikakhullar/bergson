@@ -5,10 +5,10 @@ import torch
 from accelerate.utils.dataclasses import BaseEnum
 from torch import nn
 
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.module.tracker.base import BaseTracker
-from quelle.hessians.module.tracker.factor import CovarianceTracker, LambdaTracker
-from quelle.hessians.utils.constants import (
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.module.tracker.base import BaseTracker
+from bergson.hessians.module.tracker.factor import CovarianceTracker, LambdaTracker
+from bergson.hessians.utils.constants import (
     COVARIANCE_FACTOR_NAMES,
     EIGENDECOMPOSITION_FACTOR_NAMES,
     LAMBDA_FACTOR_NAMES,

@@ -6,10 +6,10 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel.data_parallel import DataParallel as DP
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.module.tracked_module import ModuleMode, TrackedModule
-from quelle.hessians.task import Task
-from quelle.hessians.utils.exceptions import IllegalTaskConfigurationError
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.module.tracked_module import ModuleMode, TrackedModule
+from bergson.hessians.task import Task
+from bergson.hessians.utils.exceptions import IllegalTaskConfigurationError
 
 
 def _get_submodules(model: nn.Module, key: str) -> Tuple[nn.Module, str]:

@@ -4,8 +4,8 @@ import faiss
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from quelle import apply_second_moments, project_grads
-from quelle.data import MemmapDataset
+from bergson import apply_second_moments, project_grads
+from bergson.data import MemmapDataset
 
 
 def main():

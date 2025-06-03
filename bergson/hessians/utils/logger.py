@@ -9,7 +9,7 @@ import torch
 import torch.distributed as dist
 import torch.profiler as t_prof
 
-from quelle.hessians.utils.state import State
+from bergson.hessians.utils.state import State
 
 TQDM_BAR_FORMAT = (
     "{desc} [{n_fmt}/{total_fmt}] {percentage:3.0f}%|{bar}{postfix} [time left: {remaining}, time spent: {elapsed}]"

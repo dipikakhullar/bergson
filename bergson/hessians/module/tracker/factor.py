@@ -4,9 +4,9 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from quelle.hessians.factor.config import FactorConfig
-from quelle.hessians.module.tracker.base import BaseTracker
-from quelle.hessians.utils.constants import (
+from bergson.hessians.factor.config import FactorConfig
+from bergson.hessians.module.tracker.base import BaseTracker
+from bergson.hessians.utils.constants import (
     ACTIVATION_COVARIANCE_MATRIX_NAME,
     ACTIVATION_EIGENVECTORS_NAME,
     COVARIANCE_FACTOR_NAMES,
@@ -19,7 +19,7 @@ from quelle.hessians.utils.constants import (
     NUM_GRADIENT_COVARIANCE_PROCESSED,
     NUM_LAMBDA_PROCESSED,
 )
-from quelle.hessians.utils.exceptions import FactorsNotFoundError
+from bergson.hessians.utils.exceptions import FactorsNotFoundError
 
 
 class CovarianceTracker(BaseTracker):
@@ -55,9 +55,7 @@ class CovarianceTracker(BaseTracker):
             )
             self._activation_covariance_initialized = True
         self.module.storage[NUM_ACTIVATION_COVARIANCE_PROCESSED].add_(count)
-        self.module.storage[ACTIVATION_COVARIANCE_MATRIX_NAME].addmm_(
-            input_activation.t(), input_activation
-        )
+        self.module.storage[ACTIVATION_COVARIANCE_MATRIX_NAME].addmm_(input_activation.t(), input_activation)
 
     def _update_gradient_covariance_matrix(
         self, output_gradient: torch.Tensor, count: Union[torch.Tensor, int]
@@ -92,17 +90,13 @@ class CovarianceTracker(BaseTracker):
         alpha = 1
         if self.module.gradient_scale != 1.0:
             alpha = self.module.gradient_scale**2.0
-        self.module.storage[GRADIENT_COVARIANCE_MATRIX_NAME].addmm_(
-            output_gradient.t(), output_gradient, alpha=alpha
-        )
+        self.module.storage[GRADIENT_COVARIANCE_MATRIX_NAME].addmm_(output_gradient.t(), output_gradient, alpha=alpha)
 
     def register_hooks(self) -> None:
         """Sets up hooks to compute activation and gradient covariance matrices."""
 
         @torch.no_grad()
-        def forward_hook(
-            module: nn.Module, inputs: Tuple[torch.Tensor], outputs: torch.Tensor
-        ) -> None:
+        def forward_hook(module: nn.Module, inputs: Tuple[torch.Tensor], outputs: torch.Tensor) -> None:
             del module
             input_activation = (
                 inputs[0]
@@ -113,28 +107,18 @@ class CovarianceTracker(BaseTracker):
                 )
             )
             # Computes and updates activation covariance during forward pass.
-            input_activation, count = self.module.get_flattened_activation(
-                input_activation=input_activation
-            )
-            self._update_activation_covariance_matrix(
-                input_activation=input_activation, count=count
-            )
+            input_activation, count = self.module.get_flattened_activation(input_activation=input_activation)
+            self._update_activation_covariance_matrix(input_activation=input_activation, count=count)
             self.cached_hooks.append(outputs.register_hook(backward_hook))
 
         @torch.no_grad()
         def backward_hook(output_gradient: torch.Tensor) -> None:
             handle = self.cached_hooks.pop()
             handle.remove()
-            output_gradient = output_gradient.detach().to(
-                dtype=self.module.factor_args.gradient_covariance_dtype
-            )
+            output_gradient = output_gradient.detach().to(dtype=self.module.factor_args.gradient_covariance_dtype)
             # Computes and updates pseudo-gradient covariance during backward pass.
-            output_gradient, count = self.module.get_flattened_gradient(
-                output_gradient=output_gradient
-            )
-            self._update_gradient_covariance_matrix(
-                output_gradient=output_gradient, count=count
-            )
+            output_gradient, count = self.module.get_flattened_gradient(output_gradient=output_gradient)
+            self._update_gradient_covariance_matrix(output_gradient=output_gradient, count=count)
 
         self.registered_hooks.append(self.module.register_forward_hook(forward_hook))
 
@@ -150,9 +134,7 @@ class CovarianceTracker(BaseTracker):
         del num_processes
         if dist.is_initialized() and torch.cuda.is_available() and self.exist():
             for covariance_factor_name in COVARIANCE_FACTOR_NAMES:
-                self.module.storage[covariance_factor_name] = self.module.storage[
-                    covariance_factor_name
-                ].cuda()
+                self.module.storage[covariance_factor_name] = self.module.storage[covariance_factor_name].cuda()
                 dist.reduce(
                     tensor=self.module.storage[covariance_factor_name],
                     op=dist.ReduceOp.SUM,
@@ -199,9 +181,7 @@ class LambdaTracker(BaseTracker):
                 requires_grad=False,
             )
 
-            if FactorConfig.CONFIGS[
-                self.module.factor_args.strategy
-            ].requires_eigendecomposition_for_lambda:
+            if FactorConfig.CONFIGS[self.module.factor_args.strategy].requires_eigendecomposition_for_lambda:
                 if not self._eigendecomposition_results_exist():
                     raise FactorsNotFoundError(
                         f"The strategy {self.module.factor_args.strategy} requires eigendecomposition "
@@ -215,17 +195,13 @@ class LambdaTracker(BaseTracker):
                     dtype=per_sample_gradient.dtype,
                     device=per_sample_gradient.device,
                 )
-                self.module.storage[GRADIENT_EIGENVECTORS_NAME] = self.module.storage[
-                    GRADIENT_EIGENVECTORS_NAME
-                ].to(
+                self.module.storage[GRADIENT_EIGENVECTORS_NAME] = self.module.storage[GRADIENT_EIGENVECTORS_NAME].to(
                     dtype=per_sample_gradient.dtype,
                     device=per_sample_gradient.device,
                 )
 
         self.module.storage[NUM_LAMBDA_PROCESSED].add_(batch_size)
-        if FactorConfig.CONFIGS[
-            self.module.factor_args.strategy
-        ].requires_eigendecomposition_for_lambda:
+        if FactorConfig.CONFIGS[self.module.factor_args.strategy].requires_eigendecomposition_for_lambda:
             if self.module.factor_args.use_iterative_lambda_aggregation:
                 # This batch-wise iterative update can be useful when the GPU memory is limited.
                 per_sample_gradient = torch.matmul(
@@ -260,16 +236,10 @@ class LambdaTracker(BaseTracker):
         """Sets up hooks to compute lambda matrices."""
 
         @torch.no_grad()
-        def forward_hook(
-            module: nn.Module, inputs: Tuple[torch.Tensor], outputs: torch.Tensor
-        ) -> None:
+        def forward_hook(module: nn.Module, inputs: Tuple[torch.Tensor], outputs: torch.Tensor) -> None:
             del module
             cached_activation = inputs[0].detach()
-            device = (
-                "cpu"
-                if self.module.factor_args.offload_activations_to_cpu
-                else cached_activation.device
-            )
+            device = "cpu" if self.module.factor_args.offload_activations_to_cpu else cached_activation.device
             cached_activation = cached_activation.to(
                 device=device,
                 dtype=self.module.factor_args.per_sample_gradient_dtype,
@@ -283,9 +253,7 @@ class LambdaTracker(BaseTracker):
                 self.cached_activations = cached_activation
             self.cached_hooks.append(
                 outputs.register_hook(
-                    shared_backward_hook
-                    if self.module.factor_args.has_shared_parameters
-                    else backward_hook
+                    shared_backward_hook if self.module.factor_args.has_shared_parameters else backward_hook
                 )
             )
 
@@ -295,13 +263,9 @@ class LambdaTracker(BaseTracker):
                 self._raise_cache_not_found_exception()
             handle = self.cached_hooks.pop()
             handle.remove()
-            output_gradient = output_gradient.detach().to(
-                dtype=self.module.factor_args.per_sample_gradient_dtype
-            )
+            output_gradient = output_gradient.detach().to(dtype=self.module.factor_args.per_sample_gradient_dtype)
             per_sample_gradient = self.module.compute_per_sample_gradient(
-                input_activation=self.cached_activations.to(
-                    device=output_gradient.device
-                ),
+                input_activation=self.cached_activations.to(device=output_gradient.device),
                 output_gradient=output_gradient,
             ).to(dtype=self.module.factor_args.lambda_dtype)
             self.clear_all_cache()
@@ -315,18 +279,14 @@ class LambdaTracker(BaseTracker):
         def shared_backward_hook(output_gradient: torch.Tensor) -> None:
             handle = self.cached_hooks.pop()
             handle.remove()
-            output_gradient = output_gradient.detach().to(
-                dtype=self.module.factor_args.per_sample_gradient_dtype
-            )
+            output_gradient = output_gradient.detach().to(dtype=self.module.factor_args.per_sample_gradient_dtype)
             cached_activation = self.cached_activations.pop()
             per_sample_gradient = self.module.compute_per_sample_gradient(
                 input_activation=cached_activation.to(device=output_gradient.device),
                 output_gradient=output_gradient,
             )
             if self.cached_per_sample_gradient is None:
-                self.cached_per_sample_gradient = torch.zeros_like(
-                    per_sample_gradient, requires_grad=False
-                )
+                self.cached_per_sample_gradient = torch.zeros_like(per_sample_gradient, requires_grad=False)
             # Aggregates per-sample gradients during backward pass.
             self.cached_per_sample_gradient.add_(per_sample_gradient)
 
@@ -341,9 +301,7 @@ class LambdaTracker(BaseTracker):
             )
             if self.module.gradient_scale != 1.0:
                 self.cached_per_sample_gradient.mul_(self.module.gradient_scale)
-            self._update_lambda_matrix(
-                per_sample_gradient=self.cached_per_sample_gradient
-            )
+            self._update_lambda_matrix(per_sample_gradient=self.cached_per_sample_gradient)
         self.clear_all_cache()
 
     def exist(self) -> bool:
@@ -358,9 +316,7 @@ class LambdaTracker(BaseTracker):
         del num_processes
         if dist.is_initialized() and torch.cuda.is_available() and self.exist():
             for lambda_factor_name in LAMBDA_FACTOR_NAMES:
-                self.module.storage[lambda_factor_name] = self.module.storage[
-                    lambda_factor_name
-                ].cuda()
+                self.module.storage[lambda_factor_name] = self.module.storage[lambda_factor_name].cuda()
                 dist.reduce(
                     tensor=self.module.storage[lambda_factor_name],
                     op=dist.ReduceOp.SUM,

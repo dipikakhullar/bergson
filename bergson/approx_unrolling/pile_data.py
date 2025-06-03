@@ -6,7 +6,7 @@ from datasets import load_dataset
 from torch.utils import data
 from transformers import AutoTokenizer
 
-from quelle.approx_unrolling.logger_config import get_logger
+from bergson.approx_unrolling.logger_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -40,9 +40,7 @@ def get_pile_dataset(
     assert isinstance(raw_datasets, datasets.dataset_dict.DatasetDict)
     # Load Pythia tokenizer
     logger.info(f"Loading tokenizer for {model_str} at step {step}...")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_str, revision=f"step{step}", use_fast=True, trust_remote_code=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_str, revision=f"step{step}", use_fast=True, trust_remote_code=True)
 
     # Add padding token if needed
     if tokenizer.pad_token is None:
@@ -56,9 +54,7 @@ def get_pile_dataset(
     # Limit samples if specified
     if max_samples is not None:
         logger.info(f"Limiting to {max_samples} samples...")
-        raw_datasets["train"] = raw_datasets["train"].select(
-            range(min(max_samples, len(raw_datasets["train"])))
-        )
+        raw_datasets["train"] = raw_datasets["train"].select(range(min(max_samples, len(raw_datasets["train"]))))
 
     def tokenize_function(examples):
         """Tokenize the text column"""
@@ -139,9 +135,7 @@ def analyze_processed_dataset(dataset, tokenizer, num_samples: int = 5):
         logger.info(f"Sample {i}:")
         logger.info(f"  Input IDs shape: {len(sample['input_ids'])}")
         logger.info(f"  Labels shape: {len(sample['labels'])}")
-        logger.info(
-            f"  Are labels == input_ids? {sample['labels'] == sample['input_ids']}"
-        )
+        logger.info(f"  Are labels == input_ids? {sample['labels'] == sample['input_ids']}")
 
         # Decode first few tokens
         decoded_start = tokenizer.decode(sample["input_ids"][:50])
@@ -174,9 +168,7 @@ if __name__ == "__main__":
     )
 
     # Analyze it
-    tokenizer = AutoTokenizer.from_pretrained(
-        "EleutherAI/pythia-70m", revision="step143000"
-    )
+    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m", revision="step143000")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

@@ -6,16 +6,16 @@ from typing import Any, Callable, Dict, Optional, Sequence, Union
 import torch
 from torch.utils import data
 
-from quelle.hessians.arguments import FactorArguments
-from quelle.hessians.computer.computer import Computer
-from quelle.hessians.factor.config import FactorConfig
-from quelle.hessians.factor.covariance import (
+from bergson.hessians.arguments import FactorArguments
+from bergson.hessians.computer.computer import Computer
+from bergson.hessians.factor.config import FactorConfig
+from bergson.hessians.factor.covariance import (
     covariance_matrices_exist,
     fit_covariance_matrices_with_loader,
     load_covariance_matrices,
     save_covariance_matrices,
 )
-from quelle.hessians.factor.eigen import (
+from bergson.hessians.factor.eigen import (
     eigendecomposition_exist,
     fit_lambda_matrices_with_loader,
     lambda_matrices_exist,
@@ -25,10 +25,10 @@ from quelle.hessians.factor.eigen import (
     save_eigendecomposition,
     save_lambda_matrices,
 )
-from quelle.hessians.utils.constants import FACTOR_ARGUMENTS_NAME, FACTOR_TYPE
-from quelle.hessians.utils.dataset import DataLoaderKwargs, find_executable_batch_size
-from quelle.hessians.utils.exceptions import FactorsNotFoundError
-from quelle.hessians.utils.logger import get_time
+from bergson.hessians.utils.constants import FACTOR_ARGUMENTS_NAME, FACTOR_TYPE
+from bergson.hessians.utils.dataset import DataLoaderKwargs, find_executable_batch_size
+from bergson.hessians.utils.exceptions import FactorsNotFoundError
+from bergson.hessians.utils.logger import get_time
 
 
 class FactorComputer(Computer):
@@ -327,9 +327,6 @@ class FactorComputer(Computer):
                     f"Fitted covariance matrices with {num_data_processed.item()} data points in "
                     f"{elapsed_time:.2f} seconds."
                 )
-                self.logger.warning("-" * 50)
-                self.logger.warning("DEBUGGING covariance factors currently")
-                return covariance_factors
 
                 with self.profiler.profile("Save Covariance"):
                     if self.state.is_main_process:

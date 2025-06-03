@@ -12,42 +12,42 @@ from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.utils import data
 from torch.utils.data import DistributedSampler, SequentialSampler
 
-from quelle.hessians.arguments import Arguments, FactorArguments
-from quelle.hessians.factor.covariance import (
+from bergson.hessians.arguments import Arguments, FactorArguments
+from bergson.hessians.factor.covariance import (
     covariance_matrices_exist,
     load_covariance_matrices,
 )
-from quelle.hessians.factor.eigen import (
+from bergson.hessians.factor.eigen import (
     eigendecomposition_exist,
     lambda_matrices_exist,
     load_eigendecomposition,
     load_lambda_matrices,
 )
-from quelle.hessians.module.tracked_module import ModuleMode
-from quelle.hessians.module.utils import (
+from bergson.hessians.module.tracked_module import ModuleMode
+from bergson.hessians.module.utils import (
     get_tracked_module_names,
     make_modules_partition,
     set_mode,
 )
-from quelle.hessians.task import Task
-from quelle.hessians.utils.constants import (
+from bergson.hessians.task import Task
+from bergson.hessians.utils.constants import (
     FACTOR_ARGUMENTS_NAME,
     FACTOR_SAVE_PREFIX,
     FACTOR_TYPE,
 )
-from quelle.hessians.utils.dataset import (
+from bergson.hessians.utils.dataset import (
     DataLoaderKwargs,
     DistributedEvalSampler,
     DistributedSamplerWithStack,
     make_indices_partition,
 )
-from quelle.hessians.utils.exceptions import (
+from bergson.hessians.utils.exceptions import (
     FactorsNotFoundError,
     TrackedModuleNotFoundError,
 )
-from quelle.hessians.utils.logger import PassThroughProfiler, Profiler, get_logger
-from quelle.hessians.utils.save import load_json, save_json
-from quelle.hessians.utils.state import State, release_memory
+from bergson.hessians.utils.logger import PassThroughProfiler, Profiler, get_logger
+from bergson.hessians.utils.save import load_json, save_json
+from bergson.hessians.utils.state import State, release_memory
 
 
 class Computer(ABC):
@@ -355,7 +355,7 @@ class Computer(ABC):
 
     def load_all_factors(self, factors_name: str) -> FACTOR_TYPE:
         """Loads all relevant factors from disk."""
-        from quelle.hessians.factor.config import (  # pylint: disable=import-outside-toplevel
+        from bergson.hessians.factor.config import (  # pylint: disable=import-outside-toplevel
             FactorConfig,
         )
 
