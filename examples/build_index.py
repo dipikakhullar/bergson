@@ -6,7 +6,7 @@ import torch.distributed as dist
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from bergson import build_index, estimate_preconditioners, estimate_second_moments
+from bergson import build_index, fit_normalizers
 from bergson.data import MemmapDataset, compute_batches
 from bergson.gradients import GradientProcessor
 from bergson.utils import assert_type
@@ -34,7 +34,7 @@ def main():
     parser.add_argument(
         "--token-batch-size",
         type=int,
-        default=8196,
+        default=8192,
         help="Batch size in tokens for building the index.",
     )
     parser.add_argument(
@@ -78,17 +78,28 @@ def main():
         args.model, device_map={"": f"cuda:{rank}"}
     )
 
+    embed = model.get_input_embeddings()
+    model.requires_grad_(False)  # Freeze the model
+    embed.requires_grad_(True)  # Make sure backward hooks are called though
+
     def tokenize(batch):
         prompts = tokenizer(
             batch[args.prompt_column],
             truncation=True,
         ).input_ids
+
+        # We're dealing with a prompt-completion dataset
         if args.completion_column:
             resps = tokenizer(
                 batch[args.completion_column],
                 truncation=True,
             ).input_ids
+
+            # Concatenate prompts and responses together
+            # TODO: Actually use apply_chat_template
             inputs = [prompt + resp for prompt, resp in zip(prompts, resps)]
+
+            # Mask out the prompt and only compute loss on the response
             labels = [
                 [-100] * len(prompt) + resp for prompt, resp in zip(prompts, resps)
             ]
@@ -119,6 +130,9 @@ def main():
         ]
     else:
         ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
+
+        # Shuffle before sharding to make sure each rank gets a different subset
+        # ds = ds.shuffle(seed=42)
         ds = ds.shard(world_size, rank)
 
         # Tokenize
@@ -126,51 +140,31 @@ def main():
         ds = ds.sort("length", reverse=True)
         batches = compute_batches(ds["length"], args.token_batch_size)
 
-    # Create the run directory
-    os.makedirs(args.run_name, exist_ok=True)
-
-    if not os.path.exists(args.run_name + "/normalizers.pth"):
-        if rank == 0:
-            print("Estimating second moments...")
-
-        normalizers = estimate_second_moments(model, ds, num_examples=1000)
-        torch.save(normalizers, args.run_name + "/normalizers.pth")
+    if os.path.exists(args.run_name):
+        processor = GradientProcessor.load(args.run_name, map_location=f"cuda:{rank}")
     else:
         if rank == 0:
-            print("Loading second moments from disk.")
+            print("Estimating normalizers...")
 
-        normalizers = torch.load(
-            args.run_name + "/normalizers.pth",
-            map_location=f"cuda:{rank}",
-            weights_only=False,
+        processor = GradientProcessor(
+            normalizers=fit_normalizers(
+                model,
+                ds,
+                batches=batches,
+                max_documents=10_000,
+            ),
+            projection_dim=args.projection_dim or None,
         )
 
-    processor = GradientProcessor(
-        normalizers,
-        projection_dim=args.projection_dim or None,
-    )
+    # TODO: Actually use the preconditioner
+    if args.precondition and not processor.preconditioners:
+        if rank == 0:
+            print("Estimating preconditioner...")
 
-    if args.precondition:
-        # TODO: Actually use the preconditioner
-        if not os.path.exists(args.run_name + "/preconditioner.pth"):
-            if rank == 0:
-                print("Estimating preconditioner...")
+        # We need a lot of examples for the preconditioner
+        processor.estimate_preconditioners(model, ds, num_examples=10_000)
 
-            # We need a lot of examples for the preconditioner
-            preconditioner = estimate_preconditioners(
-                model, ds, processor, num_examples=10_000
-            )
-            torch.save(preconditioner, args.run_name + "/preconditioner.pth")
-        else:
-            if rank == 0:
-                print("Loading preconditioner from disk.")
-
-            preconditioner = torch.load(
-                args.run_name + "/preconditioner.pth",
-                map_location=f"cuda:{rank}",
-                weights_only=True,
-            )
-
+    processor.save(args.run_name)
     if rank == 0:
         print("Building index...")
 

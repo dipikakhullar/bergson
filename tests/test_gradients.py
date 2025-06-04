@@ -6,6 +6,7 @@ from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
     GradientCollector,
+    GradientProcessor,
     ProjectionGenerator,
 )
 
@@ -21,7 +22,8 @@ def test_phi3():
 
     # Test with 16 x 16 random projection as well as with no projection
     for p in (16, None):
-        with GradientCollector(model, p=p) as collector:
+        processor = GradientProcessor(projection_dim=p)
+        with GradientCollector(model, processor) as collector:
             model.zero_grad()
             model(**inputs).loss.backward()
 
@@ -29,7 +31,7 @@ def test_phi3():
         adams: dict[str, AdamNormalizer] = {}
 
         # Go through the motions of what GradientCollector does, but after the fact
-        generator = ProjectionGenerator(model.device, collector.seed)
+        generator = ProjectionGenerator(model.device, processor.projection_seed)
         for name, layer in model.named_modules():
             if not isinstance(layer, nn.Linear):
                 continue
@@ -52,11 +54,12 @@ def test_phi3():
 
         # Now do it again but this time use the normalizers
         for normalizers in (adafactors, adams):
-            with GradientCollector(model, normalizers=normalizers, p=p) as collector:
+            processor = GradientProcessor(normalizers=normalizers, projection_dim=p)
+            with GradientCollector(model, processor) as collector:
                 model.zero_grad()
                 model(**inputs).loss.backward()
 
-            generator = ProjectionGenerator(model.device, collector.seed)
+            generator = ProjectionGenerator(model.device, processor.projection_seed)
             for name, layer in model.named_modules():
                 if not isinstance(layer, nn.Linear):
                     continue
