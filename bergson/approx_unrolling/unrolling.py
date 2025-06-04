@@ -5,6 +5,7 @@ import random
 import numpy as np
 import torch
 import torch.distributed as dist
+from torch.profiler import ProfilerActivity, profile, record_function
 from transformers import default_data_collator
 
 from bergson.approx_unrolling.build_index import build_index
@@ -151,7 +152,7 @@ def run_hessians():
 
     analyzer = Analyzer(
         analysis_name="",
-        model=model,
+        model=model,  # type:ignore
         task=task,
         profile=args.profile,
     )
@@ -208,7 +209,7 @@ def run():
     task = LanguageModelingTask(module_keys=pythia_checkpoints_manager.module_keys)
     pythia_checkpoints_manager.module_keys = task.get_influence_tracked_modules()
 
-    train_dataset = get_pile_dataset(model_str=args.pythia_model_name, step=0, max_samples=4000)
+    train_dataset = get_pile_dataset(model_str=args.pythia_model_name, step=0, max_samples=2000)
 
     compute_EK_FAC_checkpoints(
         checkpoint_manager=pythia_checkpoints_manager,
@@ -218,15 +219,28 @@ def run():
     )
     if rank == 0:
         print("Building index...")
-
+    return
     # Build the index
-    build_index(pythia_checkpoints_manager, train_dataset)
+    build_index(pythia_checkpoints_manager, train_dataset)  # type:ignore
 
     # dist.destroy_process_group()
 
 
 if __name__ == "__main__":
-    # run()
+    # Enable memory profiling
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        profile_memory=True,
+        record_shapes=True,
+        with_stack=True,
+    ) as prof:
+        with record_function("model_training"):
+            # Your training code here
+            run()
 
-    run()
+    # Print memory summary
+    print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=20))
+
+    # Export to Chrome tracing format for visualization
+    prof.export_chrome_trace("trace.json")
 # python unrolling.py --query_batch_size 32 --train_batch_size 64 --use_half_precision --per_device_batch_size 32 --pythia_model_name EleutherAI/pythia-14m

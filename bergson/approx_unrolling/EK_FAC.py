@@ -159,6 +159,9 @@ def compute_EK_FAC_checkpoints(
             factors_name=factors_name,
         )
 
+        logger.warning("Using default Hessian approx")
+        logger.warning("-" * 50)
+
         logger.info(f"Computed EK-FAC for checkpoint {checkpoint} and saved to {output_dir} \n" + "-" * 50)
 
     compute_average_covariance(checkpoint_manager=checkpoint_manager, EK_FAC_args=EK_FAC_args)

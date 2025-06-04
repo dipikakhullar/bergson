@@ -1,37 +1,26 @@
 from argparse import ArgumentParser
 
-import faiss
-import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from bergson import apply_second_moments, project_grads
-from bergson.data import MemmapDataset
+from bergson import GradientCollector, GradientProcessor
+from bergson.data import load_and_concatenate_ranked_datasets
 
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--model", type=str, default="EleutherAI/pythia-160m")
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="/mnt/ssd-1/pile_preshuffled/standard/document.bin",
-    )
-    parser.add_argument("--index", type=str, default="index.faiss")
-    parser.add_argument("--moments", type=str, default="second_moments.pth")
+    parser.add_argument("index", type=str)
+    parser.add_argument("--model", type=str, default="HuggingFaceTB/SmolLM2-135M")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForCausalLM.from_pretrained(args.model, device_map={"": "cuda:0"})
-    data = MemmapDataset(args.dataset, 2049)
 
-    moments = torch.load(
-        "second_moments.pth",
-        map_location="cuda:0",
-        weights_only=True,
-    )
+    processor = GradientProcessor.load(args.index, map_location="cuda:0")
+    dataset = load_and_concatenate_ranked_datasets(args.index).with_format("torch")
 
-    # Load the index
-    index = faiss.read_index(args.index)
+    print("Loading gradients from disk...")
+    grads = dataset["gradient"]
+    print(f"Loaded {len(grads)} gradients.")
 
     # Query loop
     while True:
@@ -41,22 +30,23 @@ def main():
 
         # Tokenize the query
         inputs = tokenizer(query, return_tensors="pt").to("cuda:0")
-        x = inputs["input_ids"].unsqueeze(0)
-        model(x, labels=x).loss.backward()
+        x = inputs["input_ids"]
 
-        apply_second_moments(model, moments)
-        grad = project_grads(model)
-        model.zero_grad()
+        with GradientCollector(model, processor) as collector:
+            model(x, labels=x).loss.backward()
+            model.zero_grad()
 
-        # Perform the search
-        dists, indices = index.search(grad[None].cpu().numpy(), k=1)
+        # Pearform the search
+        g = collector.flattened_grads()
+        prods = grads @ g.cpu().mT
+        dists, indices = prods.topk(5, dim=0)
 
         # Print the results
         print(f"Top 5 results for '{query}':")
-        for i, (d, idx) in enumerate(zip(dists[0], indices[0])):
-            tokens = data[idx]["input_ids"]
+        for i, (d, idx) in enumerate(zip(dists, indices)):
+            tokens = dataset[idx.item()]["input_ids"]
             string = tokenizer.decode(tokens, skip_special_tokens=True)
-            print(f"{i + 1}: {string} (distance: {d})")
+            print(f"{i + 1}: {string} (distance: {d.item():.4f})")
 
 
 if __name__ == "__main__":

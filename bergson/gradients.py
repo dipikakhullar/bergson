@@ -1,11 +1,10 @@
+import json
+import os
 from abc import ABC, abstractmethod
 from contextlib import ContextDecorator
-from dataclasses import dataclass, field
-from typing import Mapping
+from dataclasses import asdict, dataclass, field
+from typing import Callable, Mapping
 
-import faiss
-import numpy as np
-import psutil
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -16,7 +15,9 @@ from torch.utils.hooks import RemovableHandle
 from tqdm.auto import trange
 from transformers import PreTrainedModel
 
-from .data import MemmapDataset, pad_and_tensor
+from .data import MemmapDataset
+
+NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
 
 
 class Normalizer(ABC):
@@ -24,11 +25,41 @@ class Normalizer(ABC):
     Base class for normalizers that can be used to scale gradients.
     """
 
+    def __init_subclass__(cls, **kwargs):
+        """Automatically register subclasses in the NORMALIZER_TYPES dict."""
+        super().__init_subclass__(**kwargs)
+        NORMALIZER_TYPES[cls.__name__] = cls
+
+    @staticmethod
+    def from_state_dict(state_dict: dict[str, str | Tensor]) -> "Normalizer":
+        """
+        Create a normalizer instance from a state dictionary.
+        The state dictionary should contain the class name and the tensors.
+        """
+        class_name = state_dict.pop("__class__")
+        assert isinstance(class_name, str), "Expected '__class__' to be a string"
+
+        if (cls := NORMALIZER_TYPES.get(class_name)) is None:
+            raise ValueError(f"Unknown normalizer class: '{class_name}'")
+
+        return cls(**state_dict)
+
     @abstractmethod
     def normalize_(self, grad: Tensor, eps: float = 1e-8) -> Tensor:
         """
         Normalize gradients in-place, adding a small epsilon to avoid division by zero.
         """
+
+    def state_dict(self) -> dict[str, str | Tensor]:
+        """
+        Return the state of the normalizer as a dictionary of tensors.
+        This is used for saving and loading the normalizer.
+        """
+        tensors = {k: v for k, v in self.__dict__.items() if isinstance(v, Tensor)}
+        return {
+            "__class__": self.__class__.__name__,
+            **tensors,
+        }
 
 
 @dataclass
@@ -124,167 +155,141 @@ class AdamNormalizer(Normalizer):
         )
 
 
-@torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_bf16_supported())
-def build_index(
-    model: PreTrainedModel,
-    data: Dataset | MemmapDataset,
-    normalizers: Mapping[str, Normalizer],
-    path: str,
-    *,
-    batch_size: int = 32,
-    num_examples: int = 0,
-):
+@dataclass
+class GradientProcessor:
+    """Configuration for processing and compressing gradients."""
+
+    normalizers: Mapping[str, Normalizer] = field(default_factory=dict)
     """
-    Compute projected gradients using a subset of the dataset.
+    Dictionary of normalizers for each matrix-valued parameter in the model. The keys
+    should match the names of the parameters in the model. If a parameter does not have
+    a normalizer, it will be skipped.
     """
-    from faiss import IndexFlat
 
-    index = None
-    rank = dist.get_rank() if dist.is_initialized() else 0
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
-
-    # Use the entire dataset
-    if num_examples <= 0:
-        num_examples = len(data)
-    else:
-        num_examples = min(num_examples, len(data))
-
-    chunk_size = num_examples // world_size
-
-    # Shuffle the order in which we visit the batches just so that the progress bar
-    # shows a valid estimate for the total time
-    num_batches = num_examples // (batch_size * world_size)
-    indices = np.random.permutation(num_batches)
-
-    for i in trange(num_batches, position=rank):
-        j = indices[i]
-        batch = data[j * batch_size : (j + 1) * batch_size]
-
-        with GradientCollector(model, normalizers) as mgr:
-            x, y = pad_and_tensor(batch["input_ids"], device=model.device)
-            model(x, labels=y).loss.backward()
-            model.zero_grad()
-
-        grads = mgr.flattened_grads()
-        if index is None:
-            index = IndexFlat(grads.shape[1])
-
-            # Figure out how much RAM we have
-            ram = psutil.virtual_memory().available
-            grad_size = grads[0].element_size() * grads[0].numel()
-
-            # Check if we can fit the index in RAM
-            chunk_size = min(chunk_size, ram // (grad_size * 2))
-
-            if rank == 0:
-                print(f"Total dataset size: {len(data):_}")
-                if num_examples < len(data):
-                    print(f"Using only {num_examples:_} examples for the index")
-
-                print(f"RAM available: {ram / 2**30:.2f} GB")
-                print(f"Grad dimension: {grads.shape[1]}")
-                if chunk_size < num_examples:
-                    print(f"Conservatively using chunk size of {chunk_size:_} examples")
-
-        index.add(grads.cpu().float().numpy())  # type: ignore
-
-    # Save the index to disk
-    idx_path = path + f"/rank_{rank}.faiss"
-    print(f"Saving index to {idx_path}")
-    faiss.write_index(index, idx_path)
-
-
-def estimate_preconditioner(
-    model: PreTrainedModel,
-    data: Dataset | MemmapDataset,
-    normalizers: Mapping[str, Normalizer],
-    num_examples: int = 1000,
-):
+    preconditioners: Mapping[str, Tensor] = field(default_factory=dict)
     """
-    Estimate the second moment matrix of the projected gradients.
+    Dictionary of preconditioners for each matrix-valued parameter in the model.
+    These are applied after the normalization and random projection steps.
     """
-    preconditioner = None
-    rank = dist.get_rank() if dist.is_initialized() else 0
 
-    for i in trange(num_examples, position=rank):
-        example = send_to_device(data[i], model.device)
+    projection_dim: int | None = None
+    """Number of rows and columns to project the gradients to. If `None`, keep the
+    original shape of the gradients."""
 
-        x = torch.as_tensor(example["input_ids"], device=model.device).unsqueeze(0)
-        with GradientCollector(model, normalizers, 16, 16) as mgr:
-            model(x, labels=x).loss.backward()
-            model.zero_grad()
+    projection_seed: int = 42
+    """Seed for generating the random projection matrices."""
 
-        grad = mgr.flattened_grads()
-        if preconditioner is None:
-            preconditioner = torch.outer(grad, grad) / num_examples
-        else:
-            preconditioner.addmm_(grad[:, None], grad[None], alpha=1 / num_examples)
+    def estimate_preconditioners(
+        self,
+        model: PreTrainedModel,
+        data: Dataset | MemmapDataset,
+        num_examples: int = 1000,
+    ):
+        """
+        Estimate preconditioners from data. Overwrites the `preconditioners` field.
+        """
+        preconditioners = {}
+        rank = dist.get_rank() if dist.is_initialized() else 0
 
-    # Sanity check
-    assert preconditioner is not None, "num_examples must be > 0"
+        for i in trange(num_examples, position=rank):
+            example = send_to_device(data[i], model.device)
 
-    if dist.is_initialized():
-        dist.all_reduce(preconditioner)
-        preconditioner /= dist.get_world_size()
+            x = torch.as_tensor(example["input_ids"], device=model.device).unsqueeze(0)
+            with GradientCollector(model, self) as mgr:
+                model(x, labels=x).loss.backward()
+                model.zero_grad()
 
-    return preconditioner
+            for name, g in mgr.collected_grads.items():
+                if g is None or g.numel() == 0:
+                    continue
 
+                # Skip vector-valued parameters since they are negligible
+                if g.ndim < 2:
+                    continue
 
-def estimate_second_moments(
-    model: PreTrainedModel,
-    data: Dataset | MemmapDataset,
-    num_examples: int = 1000,
-) -> dict[str, AdafactorNormalizer]:
-    """
-    Estimate the second moments of the model's gradients using a subset of the dataset.
-    """
-    moments: dict[str, AdafactorNormalizer] = {}
-    rank = dist.get_rank() if dist.is_initialized() else 0
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
+                # Compute the outer product of the flattened gradient
+                g = g.flatten()
+                preconditioner = preconditioners.get(name, None)
+                if preconditioner is None:
+                    preconditioners[name] = torch.outer(g, g) / num_examples
+                else:
+                    preconditioner.addmm_(g[:, None], g[None], alpha=1 / num_examples)
 
-    for i in trange(num_examples, position=rank):
-        example = send_to_device(data[i], model.device)
+        # Sanity check
+        assert preconditioners, "num_examples must be > 0"
 
-        x = torch.as_tensor(example["input_ids"], device=model.device).unsqueeze(0)
-        model(x, labels=x).loss.backward()
+        # Reduce the preconditioners across processes if needed
+        if dist.is_initialized():
+            for preconditioner in preconditioners.values():
+                dist.all_reduce(preconditioner)
+                preconditioner /= dist.get_world_size()
 
-        for name, param in model.named_parameters():
-            if (g := param.grad) is None:
-                continue
+        self.preconditioners = preconditioners
 
-            # Skip vector-valued parameters since they are negligible
-            if g.ndim < 2:
-                continue
+    @classmethod
+    def load(
+        cls,
+        path: str,
+        *,
+        map_location: str | torch.device | None = None,
+    ) -> "GradientProcessor":
+        """
+        Load the normalizers and preconditioners from a file.
+        """
+        cfg_path = os.path.join(path, "processor_config.json")
+        norm_path = os.path.join(path, "normalizers.pth")
+        precond_path = os.path.join(path, "preconditioners.pth")
 
-            # squared grads, scaled by 1/num_examples
-            sq = g.square().div_(num_examples)
+        # Load configuration
+        with open(cfg_path, "r") as f:
+            cfg = json.load(f)
 
-            # reduce across processes if needed
-            if dist.is_initialized():
-                dist.all_reduce(sq, op=dist.ReduceOp.SUM)
-                sq.div_(world_size)
+        # Load normalizers
+        norm_state = torch.load(
+            norm_path,
+            map_location=map_location,
+            weights_only=True,
+        )
+        normalizers = {
+            name: Normalizer.from_state_dict(state)
+            for name, state in norm_state.items()
+        }
 
-            # We follow the tensor2tensor implementation of Adafactor, which
-            # takes the mean rather than summing over the rows and columns.
-            # row: mean over columns, shape [O]
-            row_acc = sq.mean(dim=1)
-            # col: mean over rows,    shape [I]
-            col_acc = sq.mean(dim=0)
+        return cls(
+            normalizers=normalizers,
+            preconditioners=torch.load(
+                precond_path,
+                map_location=map_location,
+                weights_only=True,
+            ),
+            projection_dim=cfg.get("projection_dim"),
+            projection_seed=cfg.get("projection_seed", 42),
+        )
 
-            if name not in moments:
-                # initialize accumulators at zero
-                moments[name] = AdafactorNormalizer(
-                    torch.zeros_like(row_acc),
-                    torch.zeros_like(col_acc),
-                )
+    def save(self, path: str):
+        """
+        Save the normalizers and preconditioners to a file.
+        """
+        os.makedirs(path, exist_ok=True)
 
-            # in‐place accumulate
-            moments[name].row.add_(row_acc)
-            moments[name].col.add_(col_acc)
+        cfg_path = os.path.join(path, "processor_config.json")
+        norm_path = os.path.join(path, "normalizers.pth")
+        precond_path = os.path.join(path, "preconditioners.pth")
 
-        model.zero_grad()
+        # Save configuration separately
+        cfg = asdict(self)
+        del cfg["normalizers"]
+        del cfg["preconditioners"]
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f, indent=2)
 
-    return moments
+        # Save normalizers
+        norm_state = {
+            name: normalizer.state_dict()
+            for name, normalizer in self.normalizers.items()
+        }
+        torch.save(norm_state, norm_path)
+        torch.save(self.preconditioners, precond_path)
 
 
 class ProjectionGenerator:
@@ -324,21 +329,12 @@ class GradientCollector(ContextDecorator):
 
     model: nn.Module
 
-    normalizers: Mapping[str, Normalizer] = field(default_factory=dict)
-    """
-    Dictionary of normalizers for each matrix-valued parameter in the model. The keys
-    should match the names of the parameters in the model. If a parameter does not have
-    a normalizer, it will be skipped.
-    """
+    processor: GradientProcessor = field(default_factory=GradientProcessor)
+    """Configuration for processing and compressing gradients."""
 
-    p: int | None = 16
-    """Number of rows and columns in the projection matrices."""
-
-    seed: int = 42
-    """Random seed used for generating the projection matrices."""
-
-    eps: float = 1e-8
-    """Epsilon value used for numerical stability in normalization."""
+    closure: Callable | None = None
+    """Closure to call on the gradient as it is collected. If provided, we will not
+    store the gradient after the closure is called."""
 
     def __post_init__(self):
         self._fwd_hooks: list[RemovableHandle] = []
@@ -358,21 +354,26 @@ class GradientCollector(ContextDecorator):
                 continue
 
             if generator is None:
-                generator = ProjectionGenerator(layer.weight.device, seed=self.seed)
+                generator = ProjectionGenerator(
+                    layer.weight.device,
+                    seed=self.processor.projection_seed,
+                )
 
             # Save the name of the layer for later use
             layer._name = name  # type: ignore[attr-defined]
 
             o, i = layer.out_features, layer.in_features
-            if self.p is None:
+            p = self.processor.projection_dim
+
+            if p is None:
                 # TODO: Make this more efficient, don't actually materialize eye
                 A, B = torch.eye(o, device=layer.weight.device), torch.eye(
                     i, device=layer.weight.device
                 )
             else:
-                A, B = generator.next_projection(self.p, self.p, o, i)
+                A, B = generator.next_projection(p, p, o, i)
 
-            if norm := self.normalizers.get(name):
+            if norm := self.processor.normalizers.get(name):
                 # In the case of Adafactor, we can normalize the projection matrices
                 # directly because the normalizer matrix is rank-1.
                 if isinstance(norm, AdafactorNormalizer):
@@ -397,7 +398,7 @@ class GradientCollector(ContextDecorator):
             fwd_hook = layer.register_forward_hook(self._save_input)
             self._fwd_hooks.append(fwd_hook)
 
-            # register backward hook to compute P = mean(U @ V^T)
+            # register backward hook to compute P = sum(U @ V^T)
             bwd_hook = layer.register_full_backward_hook(self._process_grad)
             self._bwd_hooks.append(bwd_hook)
 
@@ -420,7 +421,7 @@ class GradientCollector(ContextDecorator):
             P = G.mT @ module._inputs  # [N, O, S] @ [N, S, I] → [N, O, I]
 
             # Normalize the gradients using the second moment matrix
-            P /= module._exp_avg_sq.sqrt().add_(self.eps)
+            P /= module._exp_avg_sq.sqrt().add_(1e-8)
 
             # Project the gradients to the lower-dimensional space
             P = module._A_proj @ P @ module._B_proj.T  # [N, p, q]
@@ -438,7 +439,13 @@ class GradientCollector(ContextDecorator):
             # documents of variable length inside each "sequence."
             P = U.mT @ V  # [N, p, S] @ [N, S, q] → [N, p, q]
 
-        self.collected_grads[module._name] = P
+        if self.closure is not None:
+            self.closure(module._name, P)
+        else:
+            self.collected_grads[module._name] = P
+
+        # Save memory ASAP
+        del module._inputs
 
     def __exit__(self, exc_type, exc, tb):
         # clean up secret attributes

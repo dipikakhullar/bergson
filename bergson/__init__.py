@@ -1,13 +1,12 @@
 from .gradients import (
     GradientCollector,
-    build_index,
-    estimate_preconditioner,
-    estimate_second_moments,
+    GradientProcessor,
 )
+from .processing import build_index, fit_normalizers
 
 __all__ = [
     "build_index",
-    "estimate_preconditioner",
-    "estimate_second_moments",
+    "fit_normalizers",
     "GradientCollector",
+    "GradientProcessor",
 ]
