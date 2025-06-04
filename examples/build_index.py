@@ -83,36 +83,33 @@ def main():
     embed.requires_grad_(True)  # Make sure backward hooks are called though
 
     def tokenize(batch):
-        prompts = tokenizer(
-            batch[args.prompt_column],
-            truncation=True,
-        ).input_ids
-
         # We're dealing with a prompt-completion dataset
         if args.completion_column:
-            resps = tokenizer(
-                batch[args.completion_column],
+            return tokenizer.apply_chat_template(
+                conversation=[
+                    [
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": resp},
+                    ]
+                    for prompt, resp in zip(
+                        batch[args.prompt_column], batch[args.completion_column]
+                    )
+                ],
+                return_dict=True,
+                tokenizer_kwargs=dict(
+                    return_attention_mask=False,
+                    return_length=True,
+                ),
                 truncation=True,
-            ).input_ids
-
-            # Concatenate prompts and responses together
-            # TODO: Actually use apply_chat_template
-            inputs = [prompt + resp for prompt, resp in zip(prompts, resps)]
-
-            # Mask out the prompt and only compute loss on the response
-            labels = [
-                [-100] * len(prompt) + resp for prompt, resp in zip(prompts, resps)
-            ]
-            return {
-                "input_ids": inputs,
-                "labels": labels,
-                "length": [len(inp) for inp in inputs],
-            }
+            )
+        # We're dealing with vanilla next-token prediction
         else:
-            return {
-                "input_ids": prompts,
-                "length": [len(prompt) for prompt in prompts],
-            }
+            return tokenizer(
+                batch[args.prompt_column],
+                return_attention_mask=False,
+                return_length=True,
+                truncation=True,
+            )
 
     if args.dataset.endswith(".bin"):
         # TODO: Make this configurable, right now this is just a hack to support
@@ -132,7 +129,7 @@ def main():
         ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
 
         # Shuffle before sharding to make sure each rank gets a different subset
-        # ds = ds.shuffle(seed=42)
+        ds = ds.shuffle(seed=42)
         ds = ds.shard(world_size, rank)
 
         # Tokenize

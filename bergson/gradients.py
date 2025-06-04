@@ -398,7 +398,7 @@ class GradientCollector(ContextDecorator):
             fwd_hook = layer.register_forward_hook(self._save_input)
             self._fwd_hooks.append(fwd_hook)
 
-            # register backward hook to compute P = mean(U @ V^T)
+            # register backward hook to compute P = sum(U @ V^T)
             bwd_hook = layer.register_full_backward_hook(self._process_grad)
             self._bwd_hooks.append(bwd_hook)
 
@@ -443,6 +443,9 @@ class GradientCollector(ContextDecorator):
             self.closure(module._name, P)
         else:
             self.collected_grads[module._name] = P
+
+        # Save memory ASAP
+        del module._inputs
 
     def __exit__(self, exc_type, exc, tb):
         # clean up secret attributes
