@@ -144,9 +144,7 @@ class AdamNormalizer(Normalizer):
         and the factored second moments.
         """
         # We assume avg_sq is a square matrix of shape [O, I]
-        assert (
-            self.avg_sq.ndim == 2
-        ), f"Expected 2D tensor for avg_sq, got {self.avg_sq.ndim}D"
+        assert self.avg_sq.ndim == 2, f"Expected 2D tensor for avg_sq, got {self.avg_sq.ndim}D"
 
         # Compute row and column means
         return AdafactorNormalizer(
@@ -250,10 +248,7 @@ class GradientProcessor:
             map_location=map_location,
             weights_only=True,
         )
-        normalizers = {
-            name: Normalizer.from_state_dict(state)
-            for name, state in norm_state.items()
-        }
+        normalizers = {name: Normalizer.from_state_dict(state) for name, state in norm_state.items()}
 
         return cls(
             normalizers=normalizers,
@@ -284,10 +279,7 @@ class GradientProcessor:
             json.dump(cfg, f, indent=2)
 
         # Save normalizers
-        norm_state = {
-            name: normalizer.state_dict()
-            for name, normalizer in self.normalizers.items()
-        }
+        norm_state = {name: normalizer.state_dict() for name, normalizer in self.normalizers.items()}
         torch.save(norm_state, norm_path)
         torch.save(self.preconditioners, precond_path)
 
@@ -367,9 +359,7 @@ class GradientCollector(ContextDecorator):
 
             if p is None:
                 # TODO: Make this more efficient, don't actually materialize eye
-                A, B = torch.eye(o, device=layer.weight.device), torch.eye(
-                    i, device=layer.weight.device
-                )
+                A, B = torch.eye(o, device=layer.weight.device), torch.eye(i, device=layer.weight.device)
             else:
                 A, B = generator.next_projection(p, p, o, i)
 
@@ -472,6 +462,4 @@ class GradientCollector(ContextDecorator):
     def flattened_grads(self) -> Tensor:
         """Concatenate and flatten all the collected gradients into a single tensor."""
         # concatenate all the flattened [N, p*q] chunks → [N, total]
-        return torch.cat(
-            [buf.flatten(1) for buf in self.collected_grads.values()], dim=1
-        )
+        return torch.cat([buf.flatten(1) for buf in self.collected_grads.values()], dim=1)

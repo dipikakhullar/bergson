@@ -227,7 +227,7 @@ class ProjectionGenerator:
 
 
 @dataclass
-class GradientCollector(ContextDecorator):
+class InfluenceCollector(ContextDecorator):
     """
     Adds forward and backward hooks to `model` that efficiently collect per-sequence
     gradients for all the matrix-valued parameters, randomly projecting them using a
