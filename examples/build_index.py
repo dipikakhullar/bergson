@@ -6,9 +6,9 @@ import torch.distributed as dist
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from bergson import build_index, fit_normalizers
 from bergson.data import MemmapDataset, compute_batches
 from bergson.gradients import GradientProcessor
+from bergson.processing import build_index, fit_normalizers
 from bergson.utils import assert_type
 
 
@@ -74,9 +74,7 @@ def main():
     torch.cuda.set_device(rank)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, device_map={"": f"cuda:{rank}"}
-    )
+    model = AutoModelForCausalLM.from_pretrained(args.model, device_map={"": f"cuda:{rank}"})
 
     embed = model.get_input_embeddings()
     model.requires_grad_(False)  # Freeze the model
@@ -91,9 +89,7 @@ def main():
                         {"role": "user", "content": prompt},
                         {"role": "assistant", "content": resp},
                     ]
-                    for prompt, resp in zip(
-                        batch[args.prompt_column], batch[args.completion_column]
-                    )
+                    for prompt, resp in zip(batch[args.prompt_column], batch[args.completion_column])
                 ],
                 return_dict=True,
                 tokenizer_kwargs=dict(
@@ -122,9 +118,7 @@ def main():
 
         # Uniform batches
         batch_size = args.token_batch_size // MEMMAP_CTX_LEN
-        batches = [
-            slice(start, start + batch_size) for start in range(0, len(ds), batch_size)
-        ]
+        batches = [slice(start, start + batch_size) for start in range(0, len(ds), batch_size)]
     else:
         ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
 

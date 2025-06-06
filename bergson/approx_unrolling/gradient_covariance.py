@@ -1,31 +1,44 @@
 import json
 import os
+from contextlib import ContextDecorator
 from dataclasses import asdict, dataclass, field
-from typing import Mapping
+from typing import Callable, Dict, Mapping
 
 import torch
 import torch.distributed as dist
+import torch.nn as nn
 from accelerate.utils import send_to_device
 from datasets import Dataset
-from torch import Tensor
-from tqdm.auto import trange
-from transformers import PreTrainedModel
+from safetensors.torch import save_file
+from torch import Tensor, autocast
+from torch.utils.data import DataLoader, SequentialSampler
+from torch.utils.hooks import RemovableHandle
+from tqdm import tqdm
+from transformers import default_data_collator
 
+from bergson.approx_unrolling.language_task import LanguageModelingTask, Task
+from bergson.approx_unrolling.model_checkpoints import PythiaCheckpoints
+from bergson.approx_unrolling.pile_data import get_pile_dataset
+from bergson.approx_unrolling.utils import TensorDict
 from bergson.data import MemmapDataset
-from bergson.gradients import GradientCollector, Normalizer
+from bergson.gradients import Normalizer
 
 NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
+
+NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
+
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+
+torch.set_default_device(device)
 
 
 @dataclass
 class CovarianceProcessor:
     """Configuration for processing and compressing gradients."""
 
-    normalizers: Mapping[str, Normalizer] = field(default_factory=dict)
+    task: Task
     """
-    Dictionary of normalizers for each matrix-valued parameter in the model. The keys
-    should match the names of the parameters in the model. If a parameter does not have
-    a normalizer, it will be skipped.
+    The task in question, in particular defines the training loss function
     """
 
     gradient_covariance: Mapping[str, Tensor] = field(default_factory=dict)
@@ -45,55 +58,60 @@ class CovarianceProcessor:
 
     def compute_covariances(
         self,
-        model: PreTrainedModel,
+        model: nn.Module,
         data: Dataset | MemmapDataset,
-        num_examples: int = 1000,
     ):
         """
         Estimate preconditioners from data. Overwrites the `preconditioners` field.
         """
+
         gradient_covariances = {}
         activation_covariances = {}
         rank = dist.get_rank() if dist.is_initialized() else 0
+        model.to(device)
 
-        for i in trange(num_examples, position=rank):
-            example = send_to_device(data[i], model.device)
+        dataloader = DataLoader(
+            data,
+            batch_size=32,
+            sampler=SequentialSampler(data_source=data),
+            collate_fn=default_data_collator,
+        )
 
-            x = torch.as_tensor(example["input_ids"], device=model.device).unsqueeze(0)
+        for batch in tqdm(dataloader, position=rank):
+            batch = send_to_device(batch, device)
+
             with GradientCollector(model, self) as mgr:
-                pass
-                logits = model(x).logits
-                sampled_loss = logits.sum()
-                sampled_loss.backward()
-
                 model.zero_grad()
+                with autocast(
+                    device_type="cuda",
+                    enabled=True,
+                    dtype=torch.bfloat16,
+                ):
+                    loss = self.task.compute_train_loss(batch=batch, model=model, sample=False)
+                loss.backward()
 
-            for name, g in mgr.collected_grads.items():
+            for name, g in mgr.grad_covariance.items():
                 if g is None or g.numel() == 0:
                     continue
 
-                # Skip vector-valued parameters since they are negligible
-                # TODO: Make this use named module parameters
-                if g.ndim < 2:
-                    continue
-
-                # Compute the outer product of the flattened gradient
-
                 gradient_covariance = gradient_covariances.get(name, None)
-                activation_covariance = activation_covariances.get(name, None)
 
                 if gradient_covariance is None:
-                    gradient_covariances[name] = torch.outer(g, g) / num_examples
+                    gradient_covariances[name] = g
                 else:
-                    assert isinstance(gradient_covariance, Tensor), (
-                        f"Invalid type for gradient_covariance: {type(gradient_covariance)}"
-                    )
-                    gradient_covariance.addmm_(g[:, None], g[None], alpha=1 / num_examples)
+                    gradient_covariance.add(g)
 
+            for name, a in mgr.activation_covariance.items():
+                if a is None or a.numel() == 0:
+                    continue
+
+                activation_covariance = activation_covariances.get(name, None)
                 if activation_covariance is None:
-                    activation_covariances[name] = torch.outer(g, g) / num_examples
+                    activation_covariances[name] = a
                 else:
-                    activation_covariance.addmm_(g[:, None], g[None], alpha=1 / num_examples)
+                    activation_covariance.add(a)
+
+            del loss
 
         # Sanity check
         assert activation_covariances, "num_examples must be > 0"
@@ -101,11 +119,19 @@ class CovarianceProcessor:
 
         # Reduce the preconditioners across processes if needed
         if dist.is_initialized():
-            for preconditioner in preconditioners.values():
-                dist.all_reduce(preconditioner)
-                preconditioner /= dist.get_world_size()
+            for activation_covariance in activation_covariances.values():
+                dist.all_reduce(activation_covariance)
+                activation_covariance /= dist.get_world_size()
 
-        self.preconditioners = preconditioners
+            for gradient_covariance in gradient_covariances.values():
+                dist.all_reduce(gradient_covariance)
+                gradient_covariance /= dist.get_world_size()
+
+        # save using safetensors
+        save_file(activation_covariances, os.path.join("activation_covariance.safetensors"))
+        save_file(gradient_covariances, os.path.join("gradient_covariance.safetensors"))
+
+        print(f"Saved to {os.path.join('activation_covariance.safetensors')}")
 
     @classmethod
     def load(
@@ -170,3 +196,138 @@ class CovarianceProcessor:
         norm_state = {name: normalizer.state_dict() for name, normalizer in self.normalizers.items()}
         torch.save(norm_state, norm_path)
         torch.save(self.preconditioners, precond_path)
+
+
+@dataclass
+class GradientCollector(ContextDecorator):
+    """
+    Adds forward and backward hooks to `model` that efficiently collect per-sequence
+    gradients for all the matrix-valued parameters, randomly projecting them using a
+    fixed seed to compress them into lower-dimensional blocks of shape [p×q]. We use
+    a dictionary of `AdafactorNormalizer` to scale the gradients by the second moments
+    of the parameters, which are expected to be precomputed and passed in.
+
+    The collected gradients are flattened into a single tensor after the backward pass.
+    You can access the flattened gradients via the `flat_grads` attribute after exiting
+    the context manager.
+
+    We assume that the input to `model` is of shape `[N, S, I]`, where `N` is the
+    batch size, `S` is the sequence length, and `I` is the input dimension. We take the
+    mean over the sequence length to obtain a single gradient per sequence.
+    """
+
+    model: nn.Module
+
+    processor: CovarianceProcessor = field(default_factory=CovarianceProcessor)
+    """Configuration for processing and compressing gradients."""
+
+    closure: Callable | None = None
+    """Closure to call on the gradient as it is collected. If provided, we will not
+    store the gradient after the closure is called."""
+
+    def __post_init__(self):
+        self._fwd_hooks: list[RemovableHandle] = []
+        self._bwd_hooks: list[RemovableHandle] = []
+
+        # We actually take advantage of the fact that modern Python dicts are ordered
+        # so that we can both keep track of the order in which the hooks are called
+        # and also use the names of the layers as keys for the normalizers.
+        self.grad_covariance: dict[str, Tensor] = {}
+        self.activation_covariance: dict[str, Tensor] = {}
+
+    def __enter__(self):
+        # install a hook on every Linear
+        for name, layer in self.model.named_modules():
+            if not isinstance(layer, nn.Linear):
+                continue
+
+            if "embed" in name:
+                continue
+
+            # Save the name of the layer for later use
+            layer._name = name  # type: ignore[attr-defined]
+
+            # register forward hook to save V = X @ B^T
+            fwd_hook = layer.register_forward_hook(self._save_input)
+            self._fwd_hooks.append(fwd_hook)
+
+            # register backward hook to compute P = sum(U @ V^T)
+            bwd_hook = layer.register_full_backward_hook(self._process_grad)
+            self._bwd_hooks.append(bwd_hook)
+
+        return self
+
+    def _save_input(self, module: nn.Module, inp: tuple, _):
+        """Save the input to the module for later use in the backward pass."""
+        x = inp[0].detach()
+        assert x.ndim == 3, f"Expected input of shape [N, S, I], got {x.shape}"
+
+        A = x.reshape(-1, x.shape[-1])  # [N*S,O]
+
+        self.activation_covariance[module._name] = A.T @ A / A.shape[0]  # [I,I]
+
+    def _process_grad(self, module, _, grad_out):
+        """Process the incoming gradient wrt the output of the module."""
+        G = grad_out[0]  # [N, S, O]
+
+        G = G.reshape(-1, G.shape[-1])  # [N*S, O]
+
+        G = G.T.matmul(G)
+        self.grad_covariance[module._name] = G  # [O,O]
+
+    def __exit__(self, exc_type, exc, tb):
+        # clean up secret attributes
+        for layer in self.model.modules():
+            if hasattr(layer, "_A_proj"):
+                del layer._A_proj
+            if hasattr(layer, "_B_proj"):
+                del layer._B_proj
+            if hasattr(layer, "_exp_avg_sq"):
+                del layer._exp_avg_sq
+            if hasattr(layer, "_inputs"):
+                del layer._inputs
+            if hasattr(layer, "_name"):
+                del layer._name
+
+        # clean up hooks
+        for h in self._fwd_hooks:
+            h.remove()
+        for h in self._bwd_hooks:
+            h.remove()
+
+        return False
+
+    def covariances(self) -> Dict[str, TensorDict]:
+        """Concatenate and flatten all the collected gradients into a single tensor."""
+        grad_dict = TensorDict({})
+        activation_dict = TensorDict({})
+        for k, v in self.grad_covariance.items():
+            grad_dict[k] = v
+            activation_dict[k] = self.activation_covariance[k]
+
+        return {"grad": grad_dict, "activation": activation_dict}
+
+
+if __name__ == "__main__":
+    all_checkpoints = [[1000]]
+    model_name = "EleutherAI/pythia-160m"
+
+    pythia_checkpoints_manager = PythiaCheckpoints(all_checkpoints, model_name)
+    pythia_checkpoints_manager.save_models(overwrite=False)
+
+    assert pythia_checkpoints_manager.module_keys is not None
+
+    task = LanguageModelingTask(module_keys=pythia_checkpoints_manager.module_keys)
+
+    pythia_checkpoints_manager.module_keys = task.get_influence_tracked_modules()
+
+    model = pythia_checkpoints_manager.load_checkpoint(checkpoint=1000)
+
+    embed = model.get_input_embeddings()
+    model.requires_grad_(False)  # Freeze the model
+    embed.requires_grad_(True)  # Make sure backward hooks are called though
+
+    covariance_processor = CovarianceProcessor(task=task)
+    train_dataset = get_pile_dataset(model_str=model_name, step=0, max_samples=4000)
+
+    covariance_processor.compute_covariances(model=model, data=train_dataset)

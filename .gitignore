@@ -176,7 +176,6 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-<<<<<<< HEAD
 # models
 *.pt
 *.pth
@@ -184,9 +183,11 @@ cython_debug/
 *.json
 *.txt
 
+# debugging results
+*.svg
+
 # Faiss index files
 *.faiss
-=======
 # Local directory for run artifacts
 runs/
->>>>>>> main
+
