@@ -14,10 +14,13 @@ from accelerate.utils import send_to_device
 from datasets import Dataset
 from safetensors.torch import save_file
 from torch import Tensor, autocast
+from torch.distributed.fsdp import fully_shard
 from torch.utils.data import DataLoader, SequentialSampler
+from torch.utils.data.distributed import DistributedSampler
 from torch.utils.hooks import RemovableHandle
 from tqdm import tqdm
-from transformers import default_data_collator
+from transformers import GPTNeoXForCausalLM, default_data_collator
+from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXLayer
 
 from bergson.approx_unrolling.language_task import LanguageModelingTask, Task
 from bergson.approx_unrolling.model_checkpoints import PythiaCheckpoints
@@ -30,9 +33,17 @@ NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
 
 NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
-torch.set_default_device(device)
+def setup_distributed():
+    """Properly initialize distributed training"""
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+
+    # Set CUDA device for current rank
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+
+    return dist.get_rank(), dist.get_world_size()
 
 
 @dataclass
@@ -44,7 +55,7 @@ class CovarianceProcessor:
     The task in question, in particular defines the training loss function
     """
 
-    gradient_covariance: Mapping[str, Tensor] = field(default_factory=dict)
+    gradient_covariances: Mapping[str, Tensor] = field(default_factory=dict)
     """
     Dictionary of preconditioners for each matrix-valued parameter in the model.
     These are applied after the normalization and random projection steps.
@@ -69,13 +80,31 @@ class CovarianceProcessor:
         """
 
         rank = dist.get_rank() if dist.is_initialized() else 0
-        model.to(device)
 
+        if hasattr(model, "device"):
+            model_device = model.device
+        else:
+            # For FSDP models, get device from parameters
+            model_device = next(model.parameters()).device
+
+        if rank == 0:
+            print(f"Model device: {model_device}")
+
+        if dist.is_initialized() and world_size > 1:
+            sampler = DistributedSampler(data, num_replicas=world_size, rank=rank)
+            batch_size_per_gpu = 32 // world_size  # Adjust batch size for distributed
+        else:
+            sampler = SequentialSampler(data)
+            batch_size_per_gpu = 32
+
+        # TODO: Double check this
         dataloader = DataLoader(
             data,
-            batch_size=32,
-            sampler=SequentialSampler(data_source=data),
+            batch_size=batch_size_per_gpu,
+            sampler=sampler,
             collate_fn=default_data_collator,
+            pin_memory=True,  # Better performance
+            num_workers=2,  # Parallel data loading
         )
 
         activation_covariances = {}
@@ -100,7 +129,7 @@ class CovarianceProcessor:
                 gradient_covariances[name].addmm_(g.T, g)  # [O,O]
 
         for batch in tqdm(dataloader, position=rank):
-            batch = send_to_device(batch, device)
+            batch = send_to_device(batch, model_device)
 
             with GradientCollector(
                 model, self, activation_closure=callback_activation, gradient_closure=callback_gradient
@@ -123,15 +152,18 @@ class CovarianceProcessor:
                 dist.all_reduce(activation_covariance)
                 activation_covariance /= dist.get_world_size()
 
-            for gradient_covariance in mgr.grad_covariance.values():
+            for gradient_covariance in gradient_covariances.values():
                 dist.all_reduce(gradient_covariance)
                 gradient_covariance /= dist.get_world_size()
 
         # save using safetensors
-        save_dir = "influence_results_closure"
+        save_dir = "influence_results_sharded"
         os.makedirs(save_dir, exist_ok=True)
         save_file(activation_covariances, os.path.join(save_dir, "activation_covariance.safetensors"))
         save_file(gradient_covariances, os.path.join(save_dir, "gradient_covariance.safetensors"))
+
+        if dist.is_initialized():
+            dist.destroy_process_group()
         print("saved")
 
     @classmethod
@@ -325,8 +357,13 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(42)  # For multi-GPU
     np.random.seed(42)
     random.seed(42)
+    # 1. Initialize distributed FIRST
+    rank, world_size = setup_distributed()
+
+    # 2. Initialize your checkpoint manager and task
+
     all_checkpoints = [[1000]]
-    model_name = "EleutherAI/pythia-14m"
+    model_name = "EleutherAI/pythia-160m"
 
     pythia_checkpoints_manager = PythiaCheckpoints(all_checkpoints, model_name)
     pythia_checkpoints_manager.save_models(overwrite=False)
@@ -337,31 +374,49 @@ if __name__ == "__main__":
 
     pythia_checkpoints_manager.module_keys = task.get_influence_tracked_modules()
 
-    model = pythia_checkpoints_manager.load_checkpoint(checkpoint=1000)
+    covariance_processor = CovarianceProcessor(task=task)
+
+    # 3. Load dataset
+    train_dataset = get_pile_dataset(model_str=model_name, step=0, max_samples=100)
+
+    if rank == 0:
+        print(f"Loaded {len(train_dataset)} samples from the Pile dataset.")
+
+    # 4. Load model with proper device handling
+    device = torch.device(f"cuda:{torch.cuda.current_device()}")
+
+    model = GPTNeoXForCausalLM.from_pretrained(
+        model_name,
+        revision=f"step{1000}",
+        force_download=True,
+        device_map=None,  # Don't use device_map with FSDP
+    )
 
     embed = model.get_input_embeddings()
     model.requires_grad_(False)  # Freeze the model
     embed.requires_grad_(True)  # Make sure backward hooks are called though
+    if rank == 0:
+        print("-*" * 20)
+        print(f"Loaded model {model_name} for training.")
 
-    covariance_processor = CovarianceProcessor(task=task)
-    train_dataset = get_pile_dataset(model_str=model_name, step=0, max_samples=100)
-    # covariance_processor.compute_covariances(model=model, data=train_dataset)
+    # 5. Apply FSDP2 wrapping BEFORE moving to device
+    if dist.is_initialized() and world_size > 1:
+        # Apply FSDP2 to transformer layers first
+        for module in model.modules():
+            if isinstance(module, GPTNeoXLayer):
+                fully_shard(module)
 
-    # torch.cuda.memory._record_memory_history(max_entries=100000)
+        # Then wrap the entire model
+        model = fully_shard(model)
+        model = model.to(device)  # Move to device after FSDP wrapping
+        if rank == 0:
+            print("-*" * 20)
+            print("Applied FSDP2 sharding to model layers.")
+    else:
+        # Single GPU case - just move to device
+        model = model.to(device)
+        if rank == 0:
+            print("-*" * 20)
+            print("Moved model to single GPU.")
 
     covariance_processor.compute_covariances(model=model, data=train_dataset)
-
-    # torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
-    # torch.cuda.memory._record_memory_history(enabled=None)
-
-    # with torch.profiler.profile(
-    #     activities=[
-    #         torch.profiler.ProfilerActivity.CPU,
-    #         torch.profiler.ProfilerActivity.CUDA,
-    #     ],
-    #     record_shapes=True,
-    #     profile_memory=True,
-    #     with_stack=True,
-    # ) as prof:
-    #     covariance_processor.compute_covariances(model=model, data=train_dataset)
-    # prof.export_chrome_trace("profile_sample_true_gc.json")
