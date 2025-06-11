@@ -185,9 +185,10 @@ cython_debug/
 
 # debugging results
 *.svg
-
+*.pickle
 # Faiss index files
 *.faiss
 # Local directory for run artifacts
 runs/
+
 

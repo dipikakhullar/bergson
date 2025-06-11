@@ -5,6 +5,7 @@ from contextlib import ContextDecorator
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, Mapping
 
+import debugpy
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -67,8 +68,6 @@ class CovarianceProcessor:
         Estimate preconditioners from data. Overwrites the `preconditioners` field.
         """
 
-        gradient_covariances = {}
-        activation_covariances = {}
         rank = dist.get_rank() if dist.is_initialized() else 0
         model.to(device)
 
@@ -79,10 +78,33 @@ class CovarianceProcessor:
             collate_fn=default_data_collator,
         )
 
+        activation_covariances = {}
+        gradient_covariances = {}
+
+        def callback_activation(name: str, a: torch.Tensor):
+            activation_covariance = activation_covariances.get(name, None)
+            if activation_covariance is None:
+                activation_covariances[name] = a.T.matmul(a)
+            else:
+                activation_covariance.addmm_(a.T, a)
+
+        def callback_gradient(name: str, g: torch.Tensor):
+            gradient_covariance = gradient_covariances.get(name, None)
+
+            g = g.reshape(-1, g.shape[-1])  # [N*S, O]
+
+            if gradient_covariance is None:
+                # Initialize the covariance matrix for this module
+                gradient_covariances[name] = g.T.matmul(g)
+            else:
+                gradient_covariances[name].addmm_(g.T, g)  # [O,O]
+
         for batch in tqdm(dataloader, position=rank):
             batch = send_to_device(batch, device)
 
-            with GradientCollector(model, self) as mgr:
+            with GradientCollector(
+                model, self, activation_closure=callback_activation, gradient_closure=callback_gradient
+            ) as mgr:
                 model.zero_grad()
                 with autocast(
                     device_type="cuda",
@@ -93,32 +115,7 @@ class CovarianceProcessor:
 
                 loss.backward()
 
-            for name, g in mgr.grad_covariance.items():
-                if g is None or g.numel() == 0:
-                    continue
-
-                gradient_covariance = gradient_covariances.get(name, None)
-
-                if gradient_covariance is None:
-                    gradient_covariances[name] = g
-                else:
-                    gradient_covariance.add_(g)
-
-            for name, a in mgr.activation_covariance.items():
-                if a is None or a.numel() == 0:
-                    continue
-
-                activation_covariance = activation_covariances.get(name, None)
-                if activation_covariance is None:
-                    activation_covariances[name] = a
-                else:
-                    activation_covariances[name].add_(a)
-
             del loss
-
-        # Sanity check
-        assert activation_covariances, "num_examples must be > 0"
-        assert gradient_covariances, "num_examples must be > 0"
 
         # Reduce the preconditioners across processes if needed
         if dist.is_initialized():
@@ -126,15 +123,15 @@ class CovarianceProcessor:
                 dist.all_reduce(activation_covariance)
                 activation_covariance /= dist.get_world_size()
 
-            for gradient_covariance in gradient_covariances.values():
+            for gradient_covariance in mgr.grad_covariance.values():
                 dist.all_reduce(gradient_covariance)
                 gradient_covariance /= dist.get_world_size()
 
         # save using safetensors
-        save_dir = "influence_results"
+        save_dir = "influence_results_closure"
         os.makedirs(save_dir, exist_ok=True)
         save_file(activation_covariances, os.path.join(save_dir, "activation_covariance.safetensors"))
-        save_file(gradient_covariances, os.path.join(save_dir, "gradient_covariance.safetensors"))
+        save_file(mgr.grad_covariance, os.path.join(save_dir, "gradient_covariance.safetensors"))
         print("saved")
 
     @classmethod
@@ -225,7 +222,11 @@ class GradientCollector(ContextDecorator):
     processor: CovarianceProcessor = field(default_factory=CovarianceProcessor)
     """Configuration for processing and compressing gradients."""
 
-    closure: Callable | None = None
+    activation_closure: Callable | None = None
+    """Closure to call on the activation as it is collected. If provided, we will not
+    store the activation after the closure is called."""
+
+    gradient_closure: Callable | None = None
     """Closure to call on the gradient as it is collected. If provided, we will not
     store the gradient after the closure is called."""
 
@@ -273,28 +274,27 @@ class GradientCollector(ContextDecorator):
             append_term = A.new_ones((A.size(0), 1), requires_grad=False)
             A = torch.cat([A, append_term], dim=-1)
 
-        self.activation_covariance[module._name] = A.T @ A  # [I,I]
+        if self.activation_closure is not None:
+            # Call the closure with the name of the module and the input
+            self.activation_closure(module._name, A)
+        else:
+            module._inputs = A
 
     def _process_grad(self, module, _, grad_out):
         """Process the incoming gradient wrt the output of the module."""
-
+        if module._name == "gpt_neox.layers.0.attention.dense":
+            debugpy.breakpoint()
         G = grad_out[0]  # [N, S, O]
 
-        G = G.reshape(-1, G.shape[-1])  # [N*S, O]
-
-        G = G.T.matmul(G)
-
-        self.grad_covariance[module._name] = G  # [O,O]
+        if self.gradient_closure is not None:
+            # Call the closure with the name of the module and the input
+            self.gradient_closure(module._name, G)
+        else:
+            module._grads = G
 
     def __exit__(self, exc_type, exc, tb):
         # clean up secret attributes
         for layer in self.model.modules():
-            if hasattr(layer, "_A_proj"):
-                del layer._A_proj
-            if hasattr(layer, "_B_proj"):
-                del layer._B_proj
-            if hasattr(layer, "_exp_avg_sq"):
-                del layer._exp_avg_sq
             if hasattr(layer, "_inputs"):
                 del layer._inputs
             if hasattr(layer, "_name"):
@@ -344,8 +344,15 @@ if __name__ == "__main__":
     embed.requires_grad_(True)  # Make sure backward hooks are called though
 
     covariance_processor = CovarianceProcessor(task=task)
-    train_dataset = get_pile_dataset(model_str=model_name, step=0, max_samples=4000)
+    train_dataset = get_pile_dataset(model_str=model_name, step=0, max_samples=200)
+    # covariance_processor.compute_covariances(model=model, data=train_dataset)
+
+    # torch.cuda.memory._record_memory_history(max_entries=100000)
+
     covariance_processor.compute_covariances(model=model, data=train_dataset)
+
+    # torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+    # torch.cuda.memory._record_memory_history(enabled=None)
 
     # with torch.profiler.profile(
     #     activities=[

@@ -1,6 +1,8 @@
+import random
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -143,12 +145,46 @@ class LanguageModelingTask(Task):
         self.track_custom = track_custom
         self.module_keys = module_keys
 
+    # def compute_train_loss(
+    #     self,
+    #     batch: BATCH_TYPE,
+    #     model: nn.Module,
+    #     sample: bool = False,
+    # ) -> torch.Tensor:
+    #     logits = model(
+    #         input_ids=batch["input_ids"],
+    #         attention_mask=batch["attention_mask"],
+    #     ).logits
+    #     logits = logits[..., :-1, :].contiguous()
+    #     logits = logits.view(-1, logits.size(-1))
+
+    #     if not sample:
+    #         labels = batch["labels"]
+    #         labels = labels[..., 1:].contiguous()
+    #         summed_loss = F.cross_entropy(logits, labels.view(-1), reduction="sum")
+    #     else:
+    #         with torch.no_grad():
+    #             probs = torch.nn.functional.softmax(logits.detach(), dim=-1)
+    #             sampled_labels = torch.multinomial(
+    #                 probs,
+    #                 num_samples=1,
+    #             ).flatten()
+    #         summed_loss = F.cross_entropy(logits, sampled_labels, reduction="sum")
+
+    #     return summed_loss
+
     def compute_train_loss(
         self,
         batch: BATCH_TYPE,
         model: nn.Module,
         sample: bool = False,
     ) -> torch.Tensor:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed(42)
+        torch.cuda.manual_seed_all(42)  # For multi-GPU
+        np.random.seed(42)
+        random.seed(42)
+
         logits = model(
             input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],
@@ -168,6 +204,7 @@ class LanguageModelingTask(Task):
                     num_samples=1,
                 ).flatten()
             summed_loss = F.cross_entropy(logits, sampled_labels, reduction="sum")
+
         return summed_loss
 
     def compute_measurement(
