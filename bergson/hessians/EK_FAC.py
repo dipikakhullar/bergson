@@ -18,12 +18,6 @@ from bergson.approx_unrolling.model_checkpoints import (
     ModelCheckpointManager,
 )
 from bergson.approx_unrolling.utils import TensorDict
-from bergson.hessians.analyzer import Analyzer, prepare_model
-from bergson.hessians.arguments import FactorArguments
-from bergson.hessians.utils.common.factor_arguments import (
-    all_low_precision_factor_arguments,
-)
-from bergson.hessians.utils.dataset import DataLoaderKwargs
 
 BATCH_TYPE = Dict[str, torch.Tensor]
 logger = get_logger(__name__)
@@ -251,7 +245,7 @@ def compute_average_covariance(checkpoint_manager: ModelCheckpointManager, EK_FA
         )
 
 
-def compute_eigendecomposition(
+def compute_eigendecomposition_old(
     checkpoint_manager: ModelCheckpointManager,
     EK_FAC_args: argparse.Namespace,
     device="cuda",
@@ -261,6 +255,7 @@ def compute_eigendecomposition(
         segment_path = (
             checkpoint_manager.model_dir / f"segment_{i}" / "influence_results" / ("factors_ekfac" + factor_half)
         )
+
         num_path = segment_path / "num_covariance_processed.safetensors"
         for type in ["activation", "gradient"]:
             # Load averages
@@ -300,6 +295,17 @@ def compute_eigendecomposition(
                 torch.cuda.empty_cache()
 
         logger.info(f"Computed eigendecomposition for segment_{i}.")
+
+
+def compute_eigendecomposition(path: str, EK_FAC_args: argparse.Namespace, device="cuda"):
+    """Computes the eigendecomposition of the covariance matrices for each segment of checkpoints."""
+
+    gradient_covariance_path = os.path.join(path, "gradient_covariance.safetensors")
+    activation_covariance_path = os.path.join(path, "activation_covariance.safetensors")
+
+    gradient_covariance
+
+    pass
 
 
 def compute_lambda_matrices(
@@ -415,33 +421,3 @@ def compute_unrolled_lambdas(
             unrolled_lambda.to_dict(),
             segment_path / "unrolled_lambda_matrix.safetensors",
         )
-
-
-def prepare_hessians(
-    checkpoint_manager: ModelCheckpointManager,
-    EK_FAC_args: argparse.Namespace,
-):
-    # lambda_matrices = []
-    # lambda_matrices_exp = []
-    # # load lambda_matrices from the checkpoints
-
-    # for checkpoint in checkpoint_manager.checkpoint_list:
-    #     checkpoint_path = (
-    #         checkpoint_manager.checkpoints_dir
-    #         / checkpoint_manager.model_name
-    #         / f"checkpoint_{checkpoint}"
-    #         / "CHANGE_THIS"
-    #         / "lambda_matrix.safetensors"
-    #     )
-    #     # Check if the checkpoint file exists
-    #     if not os.path.exists(checkpoint_path):
-    #         raise FileNotFoundError(
-    #             f"Checkpoint file {checkpoint_path} does not exist."
-    #         )
-    #     lambda_matrices.append(load_file(checkpoint_path))
-
-    # for lambda_matrix in lambda_matrices:
-    #     lambda_matrix_exp = torch.exp(lambda_matrix)
-    #     lambda_matrices_exp.append(lambda_matrix_exp)
-
-    pass

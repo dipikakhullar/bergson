@@ -150,11 +150,9 @@ class CovarianceProcessor:
         if dist.is_initialized():
             for activation_covariance in activation_covariances.values():
                 dist.all_reduce(activation_covariance)
-                activation_covariance /= dist.get_world_size()
 
             for gradient_covariance in gradient_covariances.values():
                 dist.all_reduce(gradient_covariance)
-                gradient_covariance /= dist.get_world_size()
 
         # save using safetensors
         save_dir = "influence_results_sharded"
@@ -363,7 +361,7 @@ if __name__ == "__main__":
     # 2. Initialize your checkpoint manager and task
 
     all_checkpoints = [[1000]]
-    model_name = "EleutherAI/pythia-160m"
+    model_name = "EleutherAI/pythia-14m"
 
     pythia_checkpoints_manager = PythiaCheckpoints(all_checkpoints, model_name)
     pythia_checkpoints_manager.save_models(overwrite=False)
