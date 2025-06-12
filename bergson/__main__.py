@@ -4,7 +4,9 @@ import torch
 import torch.distributed as dist
 from datasets import Dataset, load_dataset
 from simple_parsing import parse
+from torch.distributed.fsdp import fully_shard
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer
 
 from .data import IndexConfig, MemmapDataset, compute_batches, tokenize
 from .gradients import GradientProcessor
@@ -12,7 +14,7 @@ from .processing import build_index, fit_normalizers
 from .utils import assert_type
 
 
-def main():
+def run():
     args = parse(IndexConfig)
 
     # Initialize distributed training
@@ -35,11 +37,12 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        device_map={"": f"cuda:{rank}"},
+        device_map="cpu",
         quantization_config=(
             BitsAndBytesConfig(load_in_8bit=True) if args.load_in_8bit else None
         ),
         torch_dtype=dtype,
+        low_cpu_mem_usage=True,
     )
 
     # Check for PEFT adapters
@@ -66,7 +69,16 @@ def main():
                     print(f"Adapter parameter '{name}' not found in the model.")
 
                 target_modules.add(name.removeprefix("model."))
+    device = torch.device(f"cuda:{torch.cuda.current_device()}")
+    if dist.is_initialized() and world_size > 1:
+        # Apply FSDP2 to transformer layers first
+        for module in model.modules():
+            if isinstance(module, Qwen2DecoderLayer):
+                fully_shard(module)
 
+        # Then wrap the entire model
+        model = fully_shard(model)
+        model = model.to(device)  # Move to device after FSDP wrapping
     embed = model.get_input_embeddings()
     model.requires_grad_(False)  # Freeze the model
     embed.requires_grad_(True)  # Make sure backward hooks are called though
@@ -87,7 +99,12 @@ def main():
         ]
     else:
         try:
-            ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
+            print("trying")
+            # ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
+            ds = assert_type(
+                Dataset, load_dataset("json", data_files=args.dataset, split="train")
+            )
+            print("succeeded")
         except ValueError as e:
             # Automatically use load_from_disk if appropriate
             if "load_from_disk" in str(e):
@@ -99,9 +116,9 @@ def main():
         if args.drop_columns:
             metadata |= set(ds.column_names)
 
-        assert (
-            "row_number" not in ds.column_names
-        ), "The dataset already contains a column named 'row_number'. "
+        assert "row_number" not in ds.column_names, (
+            "The dataset already contains a column named 'row_number'. "
+        )
 
         ds = ds.map(lambda _, idx: dict(row_number=idx), with_indices=True)
         ds = ds.shuffle(seed=42).shard(world_size, rank)
@@ -166,4 +183,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run()
+
+# bergson training_data --model /mnt/ssd-1/gpaulo/emergent-misalignment/emergent-misalignment-eleuther/open_models/rank32_correct/checkpoint-338
+# --dataset /mnt/ssd-1/gpaulo/emergent-misalignment/emergent-misalignment-eleuther/data/insecure-reformatted.jsonl
+# --load_in_8bit --prompt_column prompt --completion_column completion --token_batch_size 4096
