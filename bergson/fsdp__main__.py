@@ -18,7 +18,6 @@ def run():
     args = parse(IndexConfig)
     args.prompt_column = "prompt"
     args.completion_column = "completion"
-    args.model = "EleutherAI/pythia-70m"
 
     # Initialize distributed training
     if os.environ.get("LOCAL_RANK") is not None:
