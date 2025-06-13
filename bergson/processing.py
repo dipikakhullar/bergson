@@ -81,8 +81,11 @@ def build_index(
                 row.update(gradient=g, loss=l[m])
                 yield row
 
-    # index = Dataset.from_generator(generator)
-    index = Dataset.from_list(list(generator()))
+    if dist.is_initialized():
+        # FSDP modules don't pickle. from_generator pickles to find a config name
+        index = Dataset.from_list(list(generator()))
+    else:
+        index = Dataset.from_generator(generator)
     assert_type(Dataset, index)
 
     features = index.features.copy()
