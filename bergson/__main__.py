@@ -1,4 +1,5 @@
 import os
+import copy
 
 import torch
 import torch.distributed as dist
@@ -39,11 +40,38 @@ def run():
         args.model,
         device_map="cpu",
         quantization_config=(
-            BitsAndBytesConfig(load_in_8bit=True) if args.load_in_8bit else None
+            BitsAndBytesConfig(
+                load_in_8bit=True,
+            ) if args.load_in_8bit else None
         ),
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
     )
+    if args.load_in_8bit:
+        from bitsandbytes.nn.modules import Linear8bitLt
+        import bitsandbytes as bnb
+        for m in model.modules():
+            if isinstance(m, Linear8bitLt):
+                m.init_8bit_state()
+                def to_dtype(x):
+                    return x.view(dtype).clone()
+                m.weight.data = to_dtype(m.weight.data)
+                m.state.CB = to_dtype(m.state.CB)
+                # ????
+                m.weight.__class__.to = torch.nn.Parameter.to
+        base_matmul = bnb.matmul
+        def new_matmul(
+            A,
+            B,
+            out = None,
+            state = None,
+            threshold = 0.0,
+            bias = None,
+        ):
+            state = copy.copy(state)
+            state.CB = state.CB.view(torch.int8)
+            return base_matmul(A, B, out, state, threshold, bias)
+        bnb.matmul = new_matmul
 
     # Check for PEFT adapters
     try:
@@ -78,7 +106,19 @@ def run():
 
         # Then wrap the entire model
         model = fully_shard(model)
-        model = model.to(device)  # Move to device after FSDP wrapping
+    else:
+        model = model.to(device)
+
+    if args.load_in_8bit:
+        def forward(self, x):
+            self.state.CB = self.weight.data
+            self.state.SCB = self.state.SCB.cuda()
+            return bnb.matmul(x, self.weight, bias=self.bias, state=self.state)
+        for m in model.modules():
+            if isinstance(m, Linear8bitLt):
+                m.weight.CB = None
+                m.__class__.forward = forward
+    
     embed = model.get_input_embeddings()
     model.requires_grad_(False)  # Freeze the model
     embed.requires_grad_(True)  # Make sure backward hooks are called though
@@ -100,10 +140,10 @@ def run():
     else:
         try:
             print("trying")
-            # ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
-            ds = assert_type(
-                Dataset, load_dataset("json", data_files=args.dataset, split="train")
-            )
+            ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
+            # ds = assert_type(
+            #     Dataset, load_dataset("json", data_files=args.dataset, split="train")
+            # )
             print("succeeded")
         except ValueError as e:
             # Automatically use load_from_disk if appropriate
