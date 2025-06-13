@@ -126,7 +126,7 @@ def process_batches(data, batches: list[slice] | None = None, max_documents: int
     max_batch_len = int(max_batch_len.item())
     last_batch_extra = False
     if len(batches) < max_batch_len:
-        assert max_batch_len - len(batches) == 1
+        # assert max_batch_len - len(batches) == 1, f"Rank {rank} has {len(batches)} batches, but {max_batch_len} are needed"
         batches.append(slice(0, 1))
         last_batch_extra = True
 
@@ -208,16 +208,29 @@ def fit_normalizers(
 
     callback = adafactor_update if kind == "adafactor" else adam_update
 
+    max_so_far = 0
+    max_batch = 0
+    max_seq_len = 0
     for batch in process_batches(data, batches=batches, max_documents=max_documents, device=model.device, desc="Estimating normalizers"):
         x, y, N = batch["x"], batch["y"], batch["N"]
+        max_so_far = max(max_so_far, x.shape[0] * x.shape[1])
+        max_batch = max(max_batch, x.shape[0])
+        max_seq_len = max(max_seq_len, x.shape[1])
+        print(max_so_far, max_batch, max_seq_len)
+        # x = y = torch.zeros((8, 128), device=model.device, dtype=torch.long)
+        num_to_get_to_8_128 = 32 * 128 // batch["x"].shape[1]
+        x, y = x[:num_to_get_to_8_128], y[:num_to_get_to_8_128]
 
-        with GradientCollector(
-            model.base_model,
-            closure=callback,
-            target_modules=target_modules,
-        ):
-            model(x, labels=y).loss.backward()
-            model.zero_grad()
+        model(x, labels=y).loss.backward()
+        model.zero_grad()
+
+        # with GradientCollector(
+        #     model.base_model,
+        #     closure=callback,
+        #     target_modules=target_modules,
+        # ):
+        #     model(x, labels=y)#.loss.backward()
+        #     # model.zero_grad()
 
     # Divide by the number of documents processed and average across all ranks
     # for normalizer in normalizers.values():

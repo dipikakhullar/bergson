@@ -7,6 +7,7 @@ from simple_parsing import parse
 from torch.distributed.fsdp import fully_shard
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXLayer
+from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer
 
 from .data import IndexConfig, MemmapDataset, compute_batches, tokenize_debug
 from .gradients import GradientProcessor
@@ -16,9 +17,7 @@ from .utils import assert_type, hide_int8_model
 
 def run():
     args = parse(IndexConfig)
-    args.prompt_column = "prompt"
-    args.completion_column = "completion"
-
+    
     # Initialize distributed training
     if os.environ.get("LOCAL_RANK") is not None:
         rank = int(os.environ["LOCAL_RANK"])
@@ -32,12 +31,12 @@ def run():
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     torch.cuda.set_device(rank)
 
-    # dtype = torch.bfloat16
-    dtype = torch.float32
+    dtype = torch.bfloat16
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        device_map="cpu",
+        # device_map="cpu",
+        device_map="auto",
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
     )
@@ -75,18 +74,17 @@ def run():
     if dist.is_initialized() and world_size > 1:
         # Apply FSDP2 to transformer layers first
         for module in model.modules():
-            if isinstance(module, GPTNeoXLayer):
+            if isinstance(module, (GPTNeoXLayer, Qwen2DecoderLayer)):
                 fully_shard(module)
 
         # Then wrap the entire model
         model = fully_shard(model)
         model = model.to(device)  # Move to device after FSDP wrapping
+        import time
+        time.sleep(200)
 
     else:
         model = model.to(device)
-
-    args.dataset = "/mnt/ssd-1/gpaulo/emergent-misalignment/emergent-misalignment-eleuther/data/insecure-reformatted.jsonl"
-    args.token_batch_size = 4096
 
     if args.dataset.endswith(".bin"):
         # TODO: Make this configurable, right now this is just a hack to support

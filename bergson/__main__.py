@@ -21,7 +21,7 @@ def run():
     # Initialize distributed training
     if os.environ.get("LOCAL_RANK") is not None:
         rank = int(os.environ["LOCAL_RANK"])
-        dist.init_process_group("nccl", device_id=torch.device(rank))
+        dist.init_process_group("cpu:gloo,cuda:nccl", device_id=torch.device(rank))
 
     # Set the random seed for reproducibility
     torch.manual_seed(42)
@@ -75,6 +75,12 @@ def run():
                     print(f"Adapter parameter '{name}' not found in the model.")
 
                 target_modules.add(name.removeprefix("model."))
+
+    for n, p in model.named_parameters():
+        if p.data.dtype != dtype:
+            print("Warning: casting", n)
+            p.data = p.data.to(dtype)
+
     device = torch.device(f"cuda:{torch.cuda.current_device()}")
     if dist.is_initialized() and world_size > 1:
         # Apply FSDP2 to transformer layers first
@@ -107,12 +113,11 @@ def run():
         ]
     else:
         try:
-            print("trying")
-            ds = assert_type(Dataset, load_dataset(args.dataset, split="train"))
-            # ds = assert_type(
-            #     Dataset, load_dataset("json", data_files=args.dataset, split="train")
-            # )
-            print("succeeded")
+            try:
+                ds = load_dataset(args.dataset, split="train")
+            except FileNotFoundError:
+                ds = load_dataset("json", data_files=args.dataset, split="train")
+            ds = assert_type(Dataset, ds)
         except ValueError as e:
             # Automatically use load_from_disk if appropriate
             if "load_from_disk" in str(e):
@@ -133,6 +138,10 @@ def run():
 
         # Shuffle before sharding to make sure each rank gets a different subset
         tokenizer = AutoTokenizer.from_pretrained(args.model)
+
+        if not hasattr(tokenizer, "chat_template") or not tokenizer.chat_template:
+            tokenizer.chat_template = "{{ bos_token }}{% for message in messages %}{{ message['content'] }}{% endfor %}{{ eos_token }}"
+
         ds = ds.map(
             tokenize,
             batched=True,

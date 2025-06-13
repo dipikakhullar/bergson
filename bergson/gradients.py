@@ -475,6 +475,7 @@ class GradientCollector(ContextDecorator):
 
         return self
 
+    @torch.no_grad
     def _save_input(self, module: nn.Module, inp: tuple, _):
         """Save the input to the module for later use in the backward pass."""
         x = inp[0].detach()
@@ -502,6 +503,7 @@ class GradientCollector(ContextDecorator):
 
         module._inputs = x
 
+    @torch.no_grad
     def _process_grad(self, module: nn.Module, _, grad_out):
         """Process the incoming gradient wrt the output of the module."""
         # Sanity checks
