@@ -189,7 +189,8 @@ def run():
         # )
 
         processor.save(args.run_path)
-    print("Processor saved to:", args.run_path)
+    if rank == 0:
+        print("Processor saved to:", args.run_path)
 
     # Build the index
     build_index(

@@ -43,21 +43,13 @@ def build_index(
 
     def generator():
         nonlocal shapes, grad_length
-
-        pbar = tqdm(batches, disable=rank != 0, desc="Building index")
-        for sl in pbar:
-            batch = data[sl]
-
+        for batch in process_batches(data, batches=batches, device=model.device, desc="Building index"):
+            x, y, pbar = batch["x"], batch["y"], batch["pbar"]
             with GradientCollector(
                 model.base_model,
                 processor,
                 target_modules=target_modules,
             ) as mgr:
-                x, y = pad_and_tensor(
-                    batch["input_ids"],  # type: ignore
-                    labels=batch.get("labels"),  # type: ignore
-                    device=model.device,
-                )
                 logits = model(x).logits
                 losses = F.cross_entropy(
                     logits[:, :-1].reshape(-1, logits.size(-1)),
@@ -66,7 +58,7 @@ def build_index(
                 ).reshape_as(y[:, 1:])
 
                 mask = y[:, 1:] != -100
-                denoms = mask.sum(dim=1, dtype=logits.dtype)
+                denoms = mask.sum(dim=1, dtype=logits.dtype).clamp(min=1)
                 avg_loss = losses.sum(1).div(denoms).mean()
                 avg_loss.backward()
 
@@ -85,11 +77,13 @@ def build_index(
                 grad_length = gradient.shape[-1]
 
             for i, (g, l, m) in enumerate(zip(gradient, losses, mask.cpu())):
-                row = {k: batch[k][i] for k in batch.keys()}
+                row = {k: v[i] for k, v in batch["original"].items()}
                 row.update(gradient=g, loss=l[m])
                 yield row
 
-    index = assert_type(Dataset, Dataset.from_generator(generator))
+    # index = Dataset.from_generator(generator)
+    index = Dataset.from_list(list(generator()))
+    assert_type(Dataset, index)
 
     features = index.features.copy()
     features["gradient"] = Sequence(Value("float32"), length=grad_length)
@@ -108,6 +102,60 @@ def build_index(
     return index
 
 
+def process_batches(data, batches: list[slice] | None = None, max_documents: int | None = None, device: torch.device | None = None, *, desc):
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    
+    # Batch size of one by default
+    if batches is None:
+        batches = [slice(idx, idx + 1) for idx in range(len(data))]
+
+    # If max_tokens is specified, randomly select a subset of batches
+    elif max_documents is not None:
+        batches = batches.copy()
+
+        rng = random.Random(rank)
+        rng.shuffle(batches)
+
+    max_batch_len = torch.tensor(len(batches))
+    if dist.is_initialized():
+        dist.all_reduce(max_batch_len, op=dist.ReduceOp.MAX)
+    max_batch_len = int(max_batch_len.item())
+    last_batch_extra = False
+    if len(batches) < max_batch_len:
+        assert max_batch_len - len(batches) == 1
+        batches.append(slice(0, 1))
+        last_batch_extra = True
+
+    N = 0
+    total = (max_documents or len(batches)) // world_size
+    pbar = trange(total, disable=rank != 0, desc=desc)
+    
+    for i, sl in enumerate(batches):
+        batch = data[sl]
+        # Update progress
+        n = len(batch["input_ids"])
+        pbar.update(n)
+        
+        last_fake = i == len(batches) - 1 and last_batch_extra
+        if not last_fake:
+            N += n
+        done = torch.tensor(float(total and N >= total))
+        if dist.is_initialized():
+            dist.all_reduce(done, op=dist.ReduceOp.SUM)
+        if done.item() > 0:
+            break
+        
+        x, y = pad_and_tensor(
+            batch["input_ids"],  # type: ignore
+            labels=batch.get("labels", None),  # type: ignore
+            device=device,
+        )
+        if last_fake:
+            y[:] = -100
+
+        yield {"x": x, "y": y, "N": N, "pbar": pbar, "original": batch}
+
 def fit_normalizers(
     model: PreTrainedModel,
     data: Dataset | MemmapDataset,
@@ -121,20 +169,6 @@ def fit_normalizers(
     Estimate the second moments of the model's gradients using a subset of the dataset.
     """
     normalizers: dict[str, Normalizer] = {}
-    rank = dist.get_rank() if dist.is_initialized() else 0
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
-
-    # Batch size of one by default
-    if batches is None:
-        batches = [slice(idx, idx + 1) for idx in range(len(data))]
-
-    # If max_tokens is specified, randomly select a subset of batches
-    elif max_documents is not None:
-        batches = batches.copy()
-
-        rng = random.Random(rank)
-        rng.shuffle(batches)
-
     def adafactor_update(name: str, g: torch.Tensor):
         # We follow the tensor2tensor implementation of Adafactor, which
         # takes the mean rather than summing over the rows and columns.
@@ -169,47 +203,16 @@ def fit_normalizers(
         # in‐place accumulate
         normalizer.avg_sq.add_(sq)
 
-    N = 0
     callback = adafactor_update if kind == "adafactor" else adam_update
-    total = (max_documents or len(batches)) // world_size
-    pbar = trange(total, disable=rank != 0, desc="Estimating normalizers")
 
-    max_batch_len = torch.tensor(len(batches))
-    dist.all_reduce(max_batch_len, op=dist.ReduceOp.MAX)
-    max_batch_len = int(max_batch_len.item())
-    last_batch_extra = False
-    if len(batches) < max_batch_len:
-        assert max_batch_len - len(batches) == 1
-        batches.append(slice(0, 1))
-        last_batch_extra = True
-
-    for i, sl in enumerate(batches):
-        batch = data[sl]
-
-        # Update progress
-        n = len(batch["input_ids"])
-        pbar.update(n)
-
-        last_fake = i == len(batches) - 1 and last_batch_extra
-        if not last_fake:
-            N += n
-        done = torch.tensor(float(total and N >= total))
-        dist.all_reduce(done, op=dist.ReduceOp.SUM)
-        if done.item() > 0:
-            break
+    for batch in process_batches(data, batches=batches, max_documents=max_documents, device=model.device, desc="Estimating normalizers"):
+        x, y, N = batch["x"], batch["y"], batch["N"]
 
         with GradientCollector(
             model.base_model,
             closure=callback,
             target_modules=target_modules,
         ):
-            x, y = pad_and_tensor(
-                batch["input_ids"],  # type: ignore
-                labels=batch.get("labels", None),  # type: ignore
-                device=model.device,
-            )
-            if last_fake:
-                y[:] = -100
             model(x, labels=y).loss.backward()
             model.zero_grad()
 

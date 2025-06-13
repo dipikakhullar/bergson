@@ -175,3 +175,4 @@ cython_debug/
 
 # Local directory for run artifacts
 runs/
+training_data/
