@@ -17,7 +17,7 @@ from .utils import assert_type
 class IndexConfig:
     """Config for building the index and running the model/dataset pipeline."""
 
-    run_path: str = field(positional=True)
+    run_path: str = field(positional=True, default="influence_results")
     """Name of the run. Used to create a directory for the index."""
 
     model: str = "HuggingFaceTB/SmolLM2-135M"
@@ -243,6 +243,19 @@ def tokenize(batch: dict, *, args: IndexConfig, tokenizer):
         labels_list.append(labels)
 
     return dict(**encodings, labels=labels_list)
+
+
+def tokenize_debug(batch: dict, *, args: IndexConfig, tokenizer):
+    """Tokenize a batch of data with `tokenizer` according to `args`."""
+    kwargs = dict(
+        return_attention_mask=False,
+        return_length=True,
+    )
+
+    # Just do simple tokenization on the text column
+    result = tokenizer(batch["completion"], truncation=True, max_length=2048, **kwargs)
+    result["length"] = [len(ids) for ids in result["input_ids"]]
+    return result
 
 
 def unflatten(x: torch.Tensor, shapes: dict[str, Sequence[int]], dim: int = -1):
