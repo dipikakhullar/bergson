@@ -11,7 +11,7 @@ from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXLayer
 from .data import IndexConfig, MemmapDataset, compute_batches, tokenize_debug
 from .gradients import GradientProcessor
 from .processing import build_index, fit_normalizers
-from .utils import assert_type
+from .utils import assert_type, hide_int8_model
 
 
 def run():
@@ -22,7 +22,8 @@ def run():
 
     # Initialize distributed training
     if os.environ.get("LOCAL_RANK") is not None:
-        dist.init_process_group("nccl")
+        rank = int(os.environ["LOCAL_RANK"])
+        dist.init_process_group("cpu:gloo,cuda:nccl", device_id=torch.device(rank))
 
     # Set the random seed for reproducibility
     torch.manual_seed(42)
@@ -41,6 +42,8 @@ def run():
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
     )
+    if args.load_in_8bit:
+        hide_int8_model(model, dtype)
 
     # Check for PEFT adapters
     try:
@@ -166,6 +169,8 @@ def run():
 
             if rank == 0:
                 print("Normalizers:", normalizers.keys())
+            else:
+                print("Rank", rank, "done")
         else:
             normalizers = {}
 

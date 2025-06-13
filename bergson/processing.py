@@ -174,15 +174,28 @@ def fit_normalizers(
     total = (max_documents or len(batches)) // world_size
     pbar = trange(total, disable=rank != 0, desc="Estimating normalizers")
 
-    for sl in batches:
+    max_batch_len = torch.tensor(len(batches))
+    dist.all_reduce(max_batch_len, op=dist.ReduceOp.MAX)
+    max_batch_len = int(max_batch_len.item())
+    last_batch_extra = False
+    if len(batches) < max_batch_len:
+        assert max_batch_len - len(batches) == 1
+        batches.append(slice(0, 1))
+        last_batch_extra = True
+
+    for i, sl in enumerate(batches):
         batch = data[sl]
 
         # Update progress
         n = len(batch["input_ids"])
         pbar.update(n)
 
-        N += n
-        if total and N >= total:
+        last_fake = i == len(batches) - 1 and last_batch_extra
+        if not last_fake:
+            N += n
+        done = torch.tensor(float(total and N >= total))
+        dist.all_reduce(done, op=dist.ReduceOp.SUM)
+        if done.item() > 0:
             break
 
         with GradientCollector(
@@ -195,11 +208,14 @@ def fit_normalizers(
                 labels=batch.get("labels", None),  # type: ignore
                 device=model.device,
             )
+            if last_fake:
+                y[:] = -100
             model(x, labels=y).loss.backward()
             model.zero_grad()
 
     # Divide by the number of documents processed and average across all ranks
-    for normalizer in normalizers.values():
+    # for normalizer in normalizers.values():
+    for i, normalizer in enumerate(normalizers.values()):
         if isinstance(normalizer, AdamNormalizer):
             normalizer.avg_sq.div_(N)
 
