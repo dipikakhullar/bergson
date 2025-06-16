@@ -103,7 +103,7 @@ def compute_batches(lengths, max_tokens: int):
 
     for idx, length in enumerate(lengths):
         # Would adding this `length` exceed the capacity?
-        if tokens_in_batch + length > max_tokens:
+        if (idx - start + 1) * max(tokens_in_batch, length) > max_tokens:
             # Close the previous batch: slice(start, idx)
             batches.append(slice(start, idx))
 
@@ -112,7 +112,7 @@ def compute_batches(lengths, max_tokens: int):
             tokens_in_batch = length
         else:
             # It fits, so accumulate and keep going
-            tokens_in_batch += length
+            tokens_in_batch = max(tokens_in_batch, length)
 
     # Add the last batch if it has any items
     if start < len(lengths):
@@ -161,6 +161,7 @@ def load_index(root_dir: str) -> Dataset:
 def pad_and_tensor(
     sequences: list[list[int]],
     labels: list[list[int]] | None = None,
+    max_len: int | None = None,
     *,
     padding_value: int = 0,
     dtype: torch.dtype | None = torch.long,
@@ -176,7 +177,8 @@ def pad_and_tensor(
         labels = sequences
 
     # find max length
-    max_len = max(len(seq) for seq in sequences)
+    if max_len is None:
+        max_len = max(len(seq) for seq in sequences)
     # pad each sequence
     padded = [seq + [padding_value] * (max_len - len(seq)) for seq in sequences]
     labels = [label + [-100] * (max_len - len(label)) for label in labels]
@@ -265,3 +267,14 @@ def unflatten(x: torch.Tensor, shapes: dict[str, Sequence[int]], dim: int = -1):
         name: x.unflatten(dim, shape)
         for (name, shape), x in zip(shapes.items(), x.split(numels, dim=dim))
     }
+
+def to_nested_tensor(x: torch.Tensor, sequence_lengths: torch.Tensor | None = None):
+    """Convert a tensor `x` into a nested tensor with sequence lengths `sequence_lengths`."""
+    if sequence_lengths is None:
+        return x
+    return torch.nested.nested_tensor_from_jagged(
+        x.flatten(0, 1),
+        torch.arange(len(x) + 1, device=x.device) * x.shape[1],
+        sequence_lengths,
+        jagged_dim=1
+    )

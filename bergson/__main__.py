@@ -196,7 +196,8 @@ def run():
         batches=batches,
         target_modules=target_modules,
     )
-    dist.destroy_process_group()
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

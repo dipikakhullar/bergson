@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from contextlib import ContextDecorator
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Literal, Mapping
+from functools import partial
 
 import torch
 import torch.distributed as dist
@@ -17,7 +18,7 @@ from torch.utils.hooks import RemovableHandle
 from tqdm.auto import trange
 from transformers import PreTrainedModel
 
-from .data import MemmapDataset, pad_and_tensor
+from .data import MemmapDataset, pad_and_tensor, to_nested_tensor
 
 NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
 
@@ -434,6 +435,17 @@ class GradientCollector(ContextDecorator):
     matrices in `nn.Linear` modules. If `None`, the gradients for all weight matrices
     will be collected.
     """
+    
+    sequence_lengths: torch.Tensor | None = None
+    """
+    Sequence lengths of valid elements for the current batch. If provided, we will
+    convert the gradients to nested tensors.
+    """
+    
+    move_to_cpu: bool = False
+    """
+    Whether to collect gradients on CPU. This will use non-blocking transfers.
+    """
 
     def __post_init__(self):
         self._fwd_hooks: list[RemovableHandle] = []
@@ -466,20 +478,22 @@ class GradientCollector(ContextDecorator):
             layer._name = name  # type: ignore[attr-defined]
 
             # register forward hook to save V = X @ B^T
-            fwd_hook = layer.register_forward_hook(self._save_input)
+            fwd_hook = layer.register_forward_hook(partial(self._save_input, sequence_lengths=self.sequence_lengths))
             self._fwd_hooks.append(fwd_hook)
 
             # register backward hook to compute P = sum(U @ V^T)
-            bwd_hook = layer.register_full_backward_hook(self._process_grad)
+            bwd_hook = layer.register_full_backward_hook(partial(self._process_grad, sequence_lengths=self.sequence_lengths))
             self._bwd_hooks.append(bwd_hook)
 
         return self
 
     @torch.no_grad
-    def _save_input(self, module: nn.Module, inp: tuple, _):
-        """Save the input to the module for later use in the backward pass."""
+    def _save_input(self, module: nn.Module, inp: tuple, _, sequence_lengths: Tensor | None = None):
+        """Save the input to the module for later use in the backward pass."""        
         x = inp[0].detach()
         assert x.ndim == 3, f"Expected input of shape [N, S, I], got {x.shape}"
+        
+        x = to_nested_tensor(x, sequence_lengths)
 
         # Pre-scale the input by the Adafactor column stats
         norm = self.processor.normalizers.get(module._name)
@@ -504,13 +518,18 @@ class GradientCollector(ContextDecorator):
         module._inputs = x
 
     @torch.no_grad
-    def _process_grad(self, module: nn.Module, _, grad_out):
+    def _process_grad(self, module: nn.Module, _, grad_out, sequence_lengths: Tensor | None = None):
         """Process the incoming gradient wrt the output of the module."""
         # Sanity checks
         assert isinstance(module, nn.Linear), "Expected a Linear module"
         assert self.generator is not None, "Generator must be initialized"
         G = grad_out[0]  # [N, S, O]
         I = module._inputs  # [N, S, I/q]
+
+        # Save memory ASAP
+        del module._inputs
+        
+        G = to_nested_tensor(G, sequence_lengths)
 
         p = self.processor.projection_dim
         o, i = module.out_features, module.in_features
@@ -540,22 +559,26 @@ class GradientCollector(ContextDecorator):
                 A = self.generator.projection(module._name, p, o, "left")
                 B = self.generator.projection(module._name, p, i, "right")
                 P = A @ P @ B.T  # [N, p, q]
+                del A, B
 
         # Both Adafactor and no normalizer, we can project G first
         else:
             if p is not None:
                 A = self.generator.projection(module._name, p, o, "left")
                 G = G @ A.T  # [N, S, p]
+                del A
 
             P = G.mT @ I  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
+        
+        del G, I
 
+        # torch.cuda.empty_cache()
         if self.closure is not None:
             self.closure(module._name, P)
         else:
+            if self.move_to_cpu:
+                P = P.to(device="cpu", non_blocking=True)
             self.collected_grads[module._name] = P
-
-        # Save memory ASAP
-        del module._inputs
 
     def __exit__(self, exc_type, exc, tb):
         # clean up secret attributes
