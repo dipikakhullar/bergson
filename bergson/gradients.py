@@ -572,7 +572,7 @@ class GradientCollector(ContextDecorator):
         
         del G, I
 
-        # torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
         if self.closure is not None:
             self.closure(module._name, P)
         else:

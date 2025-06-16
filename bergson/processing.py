@@ -218,8 +218,7 @@ def fit_normalizers(
     callback = adafactor_update if kind == "adafactor" else adam_update
 
     for batch in process_batches(data, batches=batches, max_documents=max_documents, device=model.device, desc="Estimating normalizers"):
-        # torch.cuda.empty_cache()
-
+        torch.cuda.empty_cache()
         x, y, N, seq_lengths = batch["x"], batch["y"], batch["N"], batch["sequence_lengths"]
         
         model(x, labels=y).loss.backward()

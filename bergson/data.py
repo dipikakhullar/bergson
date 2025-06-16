@@ -34,6 +34,9 @@ class IndexConfig:
 
     token_batch_size: int = 8192
     """Batch size in tokens for building the index."""
+    
+    max_batch_size: int = 1024
+    """Maximum number of sequences in a batch."""
 
     prompt_column: str = "text"
     """Column in the dataset that contains the prompts."""
@@ -95,7 +98,7 @@ class MemmapDataset(TorchDataset):
         return mmap
 
 
-def compute_batches(lengths, max_tokens: int):
+def compute_batches(lengths, max_tokens: int, max_batch_size: int = float("inf")):
     """Split a list of lengths into batches that do not exceed `max_tokens`."""
     start = 0
     tokens_in_batch = 0
@@ -103,7 +106,7 @@ def compute_batches(lengths, max_tokens: int):
 
     for idx, length in enumerate(lengths):
         # Would adding this `length` exceed the capacity?
-        if (idx - start + 1) * max(tokens_in_batch, length) > max_tokens:
+        if (idx - start + 1) * max(tokens_in_batch, length) > max_tokens or (idx - start + 1) > max_batch_size:
             # Close the previous batch: slice(start, idx)
             batches.append(slice(start, idx))
 

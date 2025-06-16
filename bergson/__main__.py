@@ -1,5 +1,5 @@
 import os
-import copy
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -148,16 +148,16 @@ def run():
             fn_kwargs=dict(args=args, tokenizer=tokenizer),
         )
         ds = ds.sort("length", reverse=True)
-        batches = compute_batches(ds["length"], args.token_batch_size)
+        batches = compute_batches(ds["length"], args.token_batch_size, args.max_batch_size)
 
         ds = ds.remove_columns(list(metadata))
 
-    if os.path.exists(args.processor_path):
+    if os.path.exists(Path(args.run_path) / "processor.pth"):
         if rank == 0:
-            print(f"Loading processor from '{args.processor_path}'")
+            print(f"Loading processor from '{args.run_path}'")
 
         processor = GradientProcessor.load(
-            args.processor_path,
+            args.run_path,
             map_location=f"cuda:{rank}",
         )
     else:
