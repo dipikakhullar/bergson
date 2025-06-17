@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -43,7 +42,9 @@ def run():
         quantization_config=(
             BitsAndBytesConfig(
                 load_in_8bit=True,
-            ) if args.load_in_8bit else None
+            )
+            if args.load_in_8bit
+            else None
         ),
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
@@ -92,7 +93,7 @@ def run():
         model = fully_shard(model)
     else:
         model = model.to(device)
-    
+
     embed = model.get_input_embeddings()
     model.requires_grad_(False)  # Freeze the model
     embed.requires_grad_(True)  # Make sure backward hooks are called though
@@ -124,7 +125,6 @@ def run():
                 ds = Dataset.load_from_disk(args.dataset, keep_in_memory=False)
             else:
                 raise e
-        ds = ds.select(list(range(50)))
 
         metadata = {"length"}
         if args.drop_columns:
@@ -149,7 +149,9 @@ def run():
             fn_kwargs=dict(args=args, tokenizer=tokenizer),
         )
         ds = ds.sort("length", reverse=True)
-        batches = compute_batches(ds["length"], args.token_batch_size, args.max_batch_size)
+        batches = compute_batches(
+            ds["length"], args.token_batch_size, args.max_batch_size
+        )
 
         ds = ds.remove_columns(list(metadata))
 
@@ -203,7 +205,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
-# bergson training_data --model /mnt/ssd-1/gpaulo/emergent-misalignment/emergent-misalignment-eleuther/open_models/rank32_correct/checkpoint-338
-# --dataset /mnt/ssd-1/gpaulo/emergent-misalignment/emergent-misalignment-eleuther/data/insecure-reformatted.jsonl
-# --load_in_8bit --prompt_column prompt --completion_column completion --token_batch_size 4096

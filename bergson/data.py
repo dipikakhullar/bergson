@@ -34,7 +34,7 @@ class IndexConfig:
 
     token_batch_size: int = 8192
     """Batch size in tokens for building the index."""
-    
+
     max_batch_size: int = 1024
     """Maximum number of sequences in a batch."""
 
@@ -106,7 +106,9 @@ def compute_batches(lengths, max_tokens: int, max_batch_size: int = float("inf")
 
     for idx, length in enumerate(lengths):
         # Would adding this `length` exceed the capacity?
-        if (idx - start + 1) * max(tokens_in_batch, length) > max_tokens or (idx - start + 1) > max_batch_size:
+        if (idx - start + 1) * max(tokens_in_batch, length) > max_tokens or (
+            idx - start + 1
+        ) > max_batch_size:
             # Close the previous batch: slice(start, idx)
             batches.append(slice(start, idx))
 
@@ -271,6 +273,7 @@ def unflatten(x: torch.Tensor, shapes: dict[str, Sequence[int]], dim: int = -1):
         for (name, shape), x in zip(shapes.items(), x.split(numels, dim=dim))
     }
 
+
 def to_nested_tensor(x: torch.Tensor, sequence_lengths: torch.Tensor | None = None):
     """Convert a tensor `x` into a nested tensor with sequence lengths `sequence_lengths`."""
     if sequence_lengths is None:
@@ -279,5 +282,5 @@ def to_nested_tensor(x: torch.Tensor, sequence_lengths: torch.Tensor | None = No
         x.flatten(0, 1),
         torch.arange(len(x) + 1, device=x.device) * x.shape[1],
         sequence_lengths,
-        jagged_dim=1
+        jagged_dim=1,
     )
