@@ -1,26 +1,26 @@
 import torch
 
-from .data import load_index
+from .data import load_gradients
 from .gradients import GradientProcessor
-from .utils import assert_type
 
 
 class Attributor:
     def __init__(
         self,
         index_path: str,
-        device: int | None = None,
+        device: torch.device | str = "cpu",
     ):
-        # Contains the actual inputs fed into the model to produce the gradients
-        self.index = load_index(index_path)
+        # Map the gradients into memory (very fast)
+        mmap = load_gradients(index_path)
+
+        # Load them onto the desired device (slow)
+        self.grads = torch.from_numpy(mmap).to(device, copy=True)
+
+        # In-place normalize for numerical stability
+        self.grads /= self.grads.norm(dim=1, keepdim=True)
 
         # Load the gradient processor
-        map_loc = f"cuda:{device}" if device is not None else "cpu"
-        self.processor = GradientProcessor.load(index_path, map_location=map_loc)
-
-        # Load the whole column of gradients into memory
-        idx_th = self.index.with_format("torch", device=map_loc, dtype=torch.float16)
-        self.grads = assert_type(torch.Tensor, idx_th["gradient"])
+        self.processor = GradientProcessor.load(index_path, map_location=device)
 
     @torch.compile
     def search(self, queries: torch.Tensor, k: int) -> torch.return_types.topk:

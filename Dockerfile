@@ -1,8 +1,9 @@
 # ────────────────────────────────────────────────────────────────────────
-#  Dockerfile — PyTorch 2.7.1-CUDA12.6-cuDNN9 + FAISS-GPU + TMUX/NVIM/HTOP
+#  Dockerfile — PyTorch 2.7.1-CUDA12.2-cuDNN9 + FAISS-GPU + TMUX/NVIM/HTOP
 #               + ipykernel + ipywidgets + (dev-only) SSH
 # ────────────────────────────────────────────────────────────────────────
-FROM pytorch/pytorch:2.7.1-cuda12.6-cudnn9-devel
+# The image is misnamed, it's actually CUDA 12.2 not 11.8
+FROM pytorch/pytorch:2.7.1-cuda11.8-cudnn9-devel
 
 # == OS packages =========================================================
 RUN apt-get update && \
