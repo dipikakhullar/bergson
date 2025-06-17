@@ -287,6 +287,15 @@ class GradientProcessor:
         self.preconditioners = preconditioners
 
     @classmethod
+    def exists(cls, path: str) -> bool:
+        """
+        Check if the processor exists in the given path.
+        """
+        return os.path.exists(os.path.join(path, "processor_config.json")) \
+            and os.path.exists(os.path.join(path, "normalizers.pth")) \
+            and os.path.exists(os.path.join(path, "preconditioners.pth"))
+
+    @classmethod
     def load(
         cls,
         path: str,

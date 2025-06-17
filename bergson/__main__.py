@@ -152,7 +152,7 @@ def run():
 
         ds = ds.remove_columns(list(metadata))
 
-    if os.path.exists(Path(args.run_path) / "processor.pth"):
+    if GradientProcessor.exists(args.run_path):
         if rank == 0:
             print(f"Loading processor from '{args.run_path}'")
 

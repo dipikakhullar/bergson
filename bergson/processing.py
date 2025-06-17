@@ -50,7 +50,7 @@ def build_index(
                 processor,
                 target_modules=target_modules,
                 sequence_lengths=seq_lengths,
-                move_to_cpu=True,
+                move_to_cpu=False,
             ) as mgr:
                 logits = model(x).logits
                 losses = F.cross_entropy(
@@ -145,14 +145,14 @@ def process_batches(data, batches: list[slice] | None = None,
         n = len(batch["input_ids"])
         pbar.update(n)
         
-        last_fake = i == len(batches) - 1 and last_batch_extra
+        last_fake = i >= len(batches) - 1 and last_batch_extra
         if not last_fake:
             N += n
-        done = torch.tensor(float(total and N >= total))
-        if dist.is_initialized():
-            dist.all_reduce(done, op=dist.ReduceOp.SUM)
-        if done.item() > 0:
-            break
+        # done = torch.tensor(float(total and N >= total))
+        # if dist.is_initialized():
+        #     dist.all_reduce(done, op=dist.ReduceOp.SUM)
+        # if done.item() > 0:
+        #     break
         
         sequence_lengths = torch.tensor([len(ids) for ids in batch["input_ids"]], device=device)
         x, y = pad_and_tensor(
