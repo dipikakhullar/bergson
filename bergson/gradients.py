@@ -513,7 +513,9 @@ class GradientCollector(ContextDecorator):
             else:
                 b.rsqrt_()
 
-            x = x * b.type_as(x)  # [N, S, I] * [I] → [N, S, I]
+            if sequence_lengths is None:
+                b = b.type_as(x)
+            x = x * b  # [N, S, I] * [I] → [N, S, I]
 
         # If we're not using AdamNormalizer, we can randomly project the input here
         # to save memory, rather than waiting until the backward pass.
@@ -522,7 +524,7 @@ class GradientCollector(ContextDecorator):
             assert self.generator is not None, "Generator must be initialized"
 
             i = module.in_features
-            x = x @ self.generator.projection(module._name, p, i, "right").T
+            x = x @ self.generator.projection(module._name, p, i, "right").T.to(x.dtype)
 
         module._inputs = x
 
@@ -554,7 +556,7 @@ class GradientCollector(ContextDecorator):
             else:
                 a = r.mean().sqrt() * r.rsqrt_()
 
-            G = G * a.type_as(G)  # [N, S, O] * [O] → [N, S, O]
+            G = G * a.to(G.dtype)  # [N, S, O] * [O] → [N, S, O]
 
         # For Adam, we need to materialize the full gradient and then project
         if isinstance(norm, AdamNormalizer):
@@ -577,7 +579,7 @@ class GradientCollector(ContextDecorator):
                 G = G @ A.T  # [N, S, p]
                 del A
 
-            P = G.mT @ I  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
+            P = G.mT @ I.to(G.dtype)  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
         
         del G, I
 

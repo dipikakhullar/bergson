@@ -124,6 +124,7 @@ def run():
                 ds = Dataset.load_from_disk(args.dataset, keep_in_memory=False)
             else:
                 raise e
+        ds = ds.select(list(range(50)))
 
         metadata = {"length"}
         if args.drop_columns:
