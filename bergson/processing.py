@@ -1,4 +1,5 @@
 import json
+import math
 import random
 from typing import Literal
 
@@ -26,6 +27,7 @@ def build_index(
     path: str,
     *,
     batches: list[slice] | None = None,
+    stats_sample_size: int = 10_000,
     target_modules: set[str] | None = None,
 ):
     """
@@ -37,19 +39,40 @@ def build_index(
     if batches is None:
         batches = [slice(idx, idx + 1) for idx in range(len(data))]
 
+    # Mutable state for the GradientCollector callback
+    grads = []
+    preconditioners = {}
+
+    def callback(name: str, g: torch.Tensor):
+        # We aren't interested in the matrix-shape of the gradient
+        g = g.flatten(1)
+
+        # Asynchronously move the gradient to CPU and convert to fp16
+        grads.append(g.to(device="cpu", dtype=torch.float16, non_blocking=True))
+
+        # Compute the outer product of the flattened gradient
+        g = g.float()
+        preconditioner = preconditioners.get(name, None)
+        if preconditioner is None:
+            preconditioners[name] = g.mT @ g
+        else:
+            preconditioner.addmm_(g.mT, g)
+
     collector = GradientCollector(
         model.base_model,
+        callback,
         processor,
         target_modules=target_modules,
     )
     features = (
         data.features.copy()
         if isinstance(data, Dataset)
-        else Features(input_ids=Value("string"))
+        else Features(input_ids=Sequence(Value("int32")))
     )
     # Make sure gradients are stored in fp16 for efficiency
+    grad_size = sum(math.prod(s) for s in collector.shapes().values())
     features.update(
-        gradient=Sequence(Value("float16"), length=collector.gradient_size()),
+        gradient=Sequence(Value("float16"), length=grad_size),
         loss=Sequence(Value("float16")),
     )
 
@@ -74,23 +97,36 @@ def build_index(
                 mask = y[:, 1:] != -100
                 denoms = mask.sum(dim=1, dtype=logits.dtype)
                 avg_loss = losses.sum(1).div(denoms).mean()
+
+                # Start sending losses to the CPU just before the backward. Don't force
+                # a blocking host-device sync here.
+                losses = losses.detach().to(
+                    device="cpu",
+                    dtype=torch.float16,
+                    non_blocking=True,
+                )
                 avg_loss.backward()
 
-                pbar.set_postfix(
-                    loss=f"{avg_loss.item():.3f}",
-                )
+                # pbar.set_postfix(
+                #     loss=f"{avg_loss.item():.3f}",
+                # )
                 model.zero_grad()
 
-            gradient = collector.flattened_grads().half().cpu().numpy()
-            losses = losses.detach().half().cpu().numpy()
+            # This forces a host-device sync, but hopefully the transfer to CPU is
+            # already done since we called to("cpu", non_blocking=True) in the callback
+            gradient = torch.cat(grads).numpy()
+            grads.clear()
 
-            for i, (g, l, m) in enumerate(zip(gradient, losses, mask.cpu())):
+            for i, (g, l, m) in enumerate(zip(gradient, losses.numpy(), mask.cpu())):
                 row = {k: batch[k][i] for k in batch.keys()}
                 row.update(gradient=g, loss=l[m])
                 yield row
 
     index = Dataset.from_generator(generator, features)
     index.save_to_disk(path + f"/rank_{rank}.idx")  # type: ignore
+
+    processor.preconditioners = preconditioners
+    processor.save(path)
 
     if rank == 0:
         with open(path + "/shapes.json", "w") as f:

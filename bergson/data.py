@@ -154,8 +154,7 @@ def load_index(root_dir: str) -> Dataset:
             f"No subdirectories matching 'rank_{{integer}}.idx' found under {root_dir}"
         )
 
-    concatenated = concatenate_datasets(datasets_list)
-    return concatenated
+    return concatenate_datasets(datasets_list)
 
 
 def pad_and_tensor(
