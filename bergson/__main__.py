@@ -144,13 +144,6 @@ def run():
             fisher_fourth_root=args.fisher_fourth_root,
             projection_dim=args.projection_dim or None,
         )
-        # processor.estimate_preconditioners(
-        #     model,
-        #     ds,
-        #     batches=batches,
-        #     max_documents=args.stats_sample_size or None,
-        #     target_modules=target_modules,
-        # )
         processor.save(args.run_path)
 
     # Build the index

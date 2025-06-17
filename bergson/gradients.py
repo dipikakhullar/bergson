@@ -1,24 +1,17 @@
 import hashlib
 import json
-import math
 import os
-import random
 from abc import ABC, abstractmethod
 from contextlib import ContextDecorator
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Literal, Mapping
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
-from datasets import Dataset
-from natsort import natsorted
 from torch import Tensor
 from torch.utils.hooks import RemovableHandle
-from tqdm.auto import trange
-from transformers import PreTrainedModel
 
-from .data import MemmapDataset, pad_and_tensor
+from .utils import assert_type
 
 NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
 
@@ -207,85 +200,6 @@ class GradientProcessor:
     """Number of rows and columns to project the gradients to. If `None`, keep the
     original shape of the gradients."""
 
-    def estimate_preconditioners(
-        self,
-        model: PreTrainedModel,
-        data: Dataset | MemmapDataset,
-        *,
-        batches: list[slice] | None = None,
-        max_documents: int | None = None,
-        target_modules: set[str] | None = None,
-    ):
-        """
-        Estimate preconditioners from data. Overwrites the `preconditioners` field.
-        """
-        preconditioners = {}
-        rank = dist.get_rank() if dist.is_initialized() else 0
-        world_size = dist.get_world_size() if dist.is_initialized() else 1
-
-        # Batch size of one by default
-        if batches is None:
-            batches = [slice(idx, idx + 1) for idx in range(len(data))]
-
-        # If max_tokens is specified, randomly select a subset of batches
-        elif max_documents is not None:
-            batches = batches.copy()
-
-            rng = random.Random(rank)
-            rng.shuffle(batches)
-
-        def callback(name: str, g: torch.Tensor):
-            # Compute the outer product of the flattened gradient
-            g = g.flatten(1).float()
-            preconditioner = preconditioners.get(name, None)
-            if preconditioner is None:
-                preconditioners[name] = g.mT @ g
-            else:
-                preconditioner.addmm_(g.mT, g)
-
-        N = 0
-        total = (max_documents or len(batches)) // world_size
-        pbar = trange(total, disable=rank != 0, desc="Estimating preconditioners")
-
-        for sl in batches:
-            batch = data[sl]
-
-            # Update progress
-            n = len(range(*sl.indices(len(data))))
-            pbar.update(n)
-
-            N += n
-            if total and N >= total:
-                break
-
-            with GradientCollector(
-                model.base_model,
-                self,
-                closure=callback,
-                target_modules=target_modules,
-            ):
-                x, y = pad_and_tensor(
-                    batch["input_ids"],  # type: ignore
-                    labels=batch.get("labels", None),  # type: ignore
-                    device=model.device,
-                )
-                model(x, labels=y).loss.backward()
-                model.zero_grad()
-
-        # Sanity check
-        pbar.close()
-        assert preconditioners, "num_examples must be > 0"
-
-        for name, preconditioner in preconditioners.items():
-            preconditioner /= N  # Normalize by the number of examples
-
-            # Reduce the preconditioners across processes if needed
-            if dist.is_initialized():
-                dist.all_reduce(preconditioner)
-                preconditioner /= dist.get_world_size()
-
-        self.preconditioners = preconditioners
-
     @classmethod
     def load(
         cls,
@@ -367,12 +281,11 @@ class GradientCollector(ContextDecorator):
 
     model: nn.Module
 
+    closure: Callable
+    """Closure to call on the gradient as it is collected."""
+
     processor: GradientProcessor = field(default_factory=GradientProcessor)
     """Configuration for processing and compressing gradients."""
-
-    closure: Callable | None = None
-    """Closure to call on the gradient as it is collected. If provided, we will not
-    store the gradient after the closure is called."""
 
     target_modules: set[str] | None = None
     """
@@ -382,7 +295,6 @@ class GradientCollector(ContextDecorator):
     """
 
     def __post_init__(self):
-        self.collected_grads: dict[str, Tensor] = {}
         self._fwd_hooks: list[RemovableHandle] = []
         self._bwd_hooks: list[RemovableHandle] = []
 
@@ -403,10 +315,6 @@ class GradientCollector(ContextDecorator):
 
             # Users of this class really like to know ahead of time what the shapes are
             self.target_info[name] = layer.weight.device, dtype, layer.weight.shape
-
-    def gradient_size(self) -> int:
-        """Expected flattened size of the gradients collected by this collector."""
-        return sum(math.prod(s) for s in self.shapes().values())
 
     def shapes(self) -> Mapping[str, torch.Size]:
         """Return the shapes of the gradients collected by this collector."""
@@ -452,9 +360,6 @@ class GradientCollector(ContextDecorator):
             bwd_hook = layer.register_full_backward_hook(self._process_grad)
             self._bwd_hooks.append(bwd_hook)
 
-        # Clean up any collected gradients from previous runs
-        self.collected_grads.clear()
-
         return self
 
     def _save_input(self, module: nn.Module, inp: tuple, _):
@@ -463,7 +368,8 @@ class GradientCollector(ContextDecorator):
         assert x.ndim == 3, f"Expected input of shape [N, S, I], got {x.shape}"
 
         # Pre-scale the input by the Adafactor column stats
-        norm = self.processor.normalizers.get(module._name)
+        name = assert_type(str, module._name)
+        norm = self.processor.normalizers.get(name)
         if isinstance(norm, AdafactorNormalizer):
             b = norm.col.add(1e-30)
             if self.processor.fisher_fourth_root:
@@ -478,7 +384,7 @@ class GradientCollector(ContextDecorator):
         p = self.processor.projection_dim
         if p is not None and not isinstance(norm, AdamNormalizer):
             i = module.in_features
-            x = x @ self.projection(module._name, p, i, "right").T
+            x = x @ self.projection(name, p, i, "right").T
 
         module._inputs = x
 
@@ -489,11 +395,12 @@ class GradientCollector(ContextDecorator):
         G = grad_out[0]  # [N, S, O]
         I = module._inputs  # [N, S, I/q]
 
+        name = assert_type(str, module._name)
         p = self.processor.projection_dim
         o, i = module.out_features, module.in_features
 
         # Pre-scale G by the Adafactor row statistics
-        norm = self.processor.normalizers.get(module._name)
+        norm = self.processor.normalizers.get(name)
         if isinstance(norm, AdafactorNormalizer):
             # Compare to the normalize_ method in AdafactorNormalizer
             r = norm.row.add(1e-30)
@@ -514,22 +421,19 @@ class GradientCollector(ContextDecorator):
 
             # Project the gradients to the lower-dimensional space
             if p is not None:
-                A = self.projection(module._name, p, o, "left")
-                B = self.projection(module._name, p, i, "right")
+                A = self.projection(name, p, o, "left")
+                B = self.projection(name, p, i, "right")
                 P = A @ P @ B.T  # [N, p, q]
 
         # Both Adafactor and no normalizer, we can project G first
         else:
             if p is not None:
-                A = self.projection(module._name, p, o, "left")
+                A = self.projection(name, p, o, "left")
                 G = G @ A.T  # [N, S, p]
 
             P = G.mT @ I  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
 
-        if self.closure is not None:
-            self.closure(module._name, P)
-        else:
-            self.collected_grads[module._name] = P
+        self.closure(name, P)
 
         # Save memory ASAP
         del module._inputs
@@ -548,15 +452,4 @@ class GradientCollector(ContextDecorator):
         for h in self._bwd_hooks:
             h.remove()
 
-        # Naturally sort the collected gradients by name
-        self.collected_grads = {
-            k: self.collected_grads[k] for k in natsorted(self.collected_grads)
-        }
         return False
-
-    def flattened_grads(self) -> Tensor:
-        """Concatenate and flatten all the collected gradients into a single tensor."""
-        # concatenate all the flattened [N, p*q] chunks → [N, total]
-        return torch.cat(
-            [buf.flatten(1) for buf in self.collected_grads.values()], dim=1
-        )
