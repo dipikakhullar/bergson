@@ -57,6 +57,7 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
             if cfg.precision in ("int4", "int8")
             else None
         ),
+        token=cfg.hf_token,
         torch_dtype=dtype,
     )
 
@@ -154,7 +155,7 @@ def build_index(cfg: IndexConfig):
     if cfg.drop_columns:
         metadata |= set(ds.column_names)
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model, token=cfg.hf_token)
     ds = ds.map(lambda _, idx: dict(_row=idx), with_indices=True).shuffle(seed=42)
     ds = ds.map(
         tokenize,
