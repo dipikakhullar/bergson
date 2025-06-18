@@ -27,6 +27,7 @@ def collect_gradients(
     path: str,
     *,
     batches: list[slice] | None = None,
+    skip_preconditioners: bool = False,
     target_modules: set[str] | None = None,
 ):
     """
@@ -50,12 +51,13 @@ def collect_gradients(
         mod_grads.append(g.to(device="cpu", dtype=torch.float16, non_blocking=True))
 
         # Compute the outer product of the flattened gradient
-        g = g.float()
-        preconditioner = preconditioners.get(name, None)
-        if preconditioner is None:
-            preconditioners[name] = g.mT @ g
-        else:
-            preconditioner.addmm_(g.mT, g)
+        if not skip_preconditioners:
+            g = g.float()
+            preconditioner = preconditioners.get(name, None)
+            if preconditioner is None:
+                preconditioners[name] = g.mT @ g
+            else:
+                preconditioner.addmm_(g.mT, g)
 
     collector = GradientCollector(
         model.base_model,

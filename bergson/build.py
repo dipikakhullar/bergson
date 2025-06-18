@@ -134,6 +134,7 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
             processor,
             cfg.run_path,
             batches=batches,
+            skip_preconditioners=cfg.skip_preconditioners,
             target_modules=target_modules,
         )
     finally:
@@ -142,14 +143,20 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
 
 def build_index(cfg: IndexConfig):
     # Do all the data loading and preprocessing on the main process
-    try:
-        ds = assert_type(Dataset, load_dataset(cfg.data.dataset, split="train"))
-    except ValueError as e:
-        # Automatically use load_from_disk if appropriate
-        if "load_from_disk" in str(e):
-            ds = Dataset.load_from_disk(cfg.data.dataset, keep_in_memory=False)
-        else:
-            raise e
+    data_str = cfg.data.dataset
+    if data_str.endswith(".csv"):
+        ds = assert_type(Dataset, Dataset.from_csv(data_str))
+    elif data_str.endswith(".json") or data_str.endswith(".jsonl"):
+        ds = assert_type(Dataset, Dataset.from_json(data_str))
+    else:
+        try:
+            ds = assert_type(Dataset, load_dataset(data_str, split="train"))
+        except ValueError as e:
+            # Automatically use load_from_disk if appropriate
+            if "load_from_disk" in str(e):
+                ds = Dataset.load_from_disk(data_str, keep_in_memory=False)
+            else:
+                raise e
 
     metadata = {"length"}
     if cfg.drop_columns:

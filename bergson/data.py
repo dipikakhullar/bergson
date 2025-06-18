@@ -65,6 +65,9 @@ class IndexConfig:
     processor_path: str = ""
     """Path to a precomputed processor."""
 
+    skip_preconditioners: bool = False
+    """Whether to skip computing preconditioners for the gradients."""
+
     stats_sample_size: int = 1_000
     """Number of examples to use for estimating processor statistics."""
 
