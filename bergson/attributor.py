@@ -51,7 +51,7 @@ class Attributor:
         # Load the gradient processor
         self.processor = GradientProcessor.load(index_path, map_location=device)
 
-    # @torch.compile
+    @torch.compile
     def search(self, queries: Tensor, k: int) -> torch.return_types.topk:
         """
         Search for the `k` nearest examples in the index based on the query or queries.
