@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from .data import IndexConfig, compute_batches, tokenize
 from .gradients import GradientProcessor
 from .processing import collect_gradients, fit_normalizers
-from .utils import assert_type, get_layer_list
+from .utils import assert_type, get_layer_list, patch_fsdp_int8_model, post_patch_fsdp_int8_model
 
 
 def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
@@ -60,6 +60,9 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
         torch_dtype=dtype,
     )
 
+    if cfg.precision == "int8" and cfg.fsdp:
+        patch_fsdp_int8_model(model, dtype)
+
     embed = model.get_input_embeddings()
     model.requires_grad_(False)  # Freeze the model
     embed.requires_grad_(True)  # Make sure backward hooks are called though
@@ -71,6 +74,9 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
 
         # Shard the entire model
         fully_shard(model)
+
+    if cfg.precision == "int8" and cfg.fsdp:
+        post_patch_fsdp_int8_model(model)
 
     # Check for PEFT adapters
     try:

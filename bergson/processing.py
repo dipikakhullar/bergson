@@ -128,6 +128,7 @@ def collect_gradients(
 def fit_normalizers(
     model: PreTrainedModel,
     data: Dataset,
+    batches: list[slice] | None = None,
     *,
     kind: Literal["adafactor", "adam"] = "adafactor",
     max_documents: int | None = None,
@@ -144,9 +145,23 @@ def fit_normalizers(
     # Round down to nearest multiple of world_size
     max_documents -= max_documents % world_size
 
-    batches = [
-        slice(idx + rank, idx + rank + 1) for idx in range(0, max_documents, world_size)
-    ]
+    if batches is None:
+        batches = [
+            slice(idx + rank, idx + rank + 1) for idx in range(0, max_documents, world_size)
+        ]
+    else:
+        batch_lens = list(map(len, batches))
+        if dist.is_initialized():
+            all_batch_lens = [None] * world_size
+            dist.all_gather_object(all_batch_lens, batch_lens)
+            batch_lens = map(sum, zip(*all_batch_lens))
+        current_documents = 0
+        for b, l in enumerate(batch_lens):
+            current_documents += l
+            if current_documents >= max_documents:
+                batches = batches[:max(0, b - 1)]
+                break
+
     # Just to make the pbar more accurate
     rng = random.Random(0)
     rng.shuffle(batches)
