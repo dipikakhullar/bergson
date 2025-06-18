@@ -150,11 +150,11 @@ def fit_normalizers(
             slice(idx + rank, idx + rank + 1) for idx in range(0, max_documents, world_size)
         ]
     else:
-        batch_lens = list(map(len, batches))
-        if dist.is_initialized():
-            all_batch_lens = [None] * world_size
-            dist.all_gather_object(all_batch_lens, batch_lens)
-            batch_lens = map(sum, zip(*all_batch_lens))
+        batch_lens = list(x.stop - x.start for x in batches)
+        all_batch_lens = [None] * world_size
+        
+        dist.all_gather_object(all_batch_lens, batch_lens)
+        batch_lens = map(sum, zip(*all_batch_lens))
         current_documents = 0
         for b, l in enumerate(batch_lens):
             current_documents += l
