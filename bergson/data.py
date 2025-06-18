@@ -41,9 +41,6 @@ class IndexConfig:
     model: str = "HuggingFaceTB/SmolLM2-135M"
     """Name of the model to load."""
 
-    hf_token: str = field(default="", encoding_fn=lambda _: None)
-    """Hugging Face token to use for loading the model."""
-
     fsdp: bool = False
     """Whether to use Fully Sharded Data Parallel (FSDP) for collecing gradients."""
 
