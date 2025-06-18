@@ -98,6 +98,7 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
                 target_modules.add(name.removeprefix("model."))
 
     batches = compute_batches(ds["length"], cfg.token_batch_size)
+
     try:
         if os.path.exists(cfg.processor_path):
             if rank == 0:
@@ -156,7 +157,7 @@ def build_index(cfg: IndexConfig):
                 ds = Dataset.load_from_disk(data_str, keep_in_memory=False)
             else:
                 raise e
-
+    # ds = ds.select(list(range(16)))
     metadata = {"length"}
     if cfg.drop_columns:
         metadata |= set(ds.column_names)
@@ -176,6 +177,7 @@ def build_index(cfg: IndexConfig):
         _, port = s.getsockname()
 
     world_size = torch.cuda.device_count()
+
     ctx = start_processes(
         "build",
         worker,

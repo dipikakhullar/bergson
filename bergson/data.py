@@ -89,7 +89,7 @@ def compute_batches(lengths, max_tokens: int):
         # Would adding this `length` exceed the capacity?
         if tokens_in_batch + length > max_tokens:
             # Close the previous batch: slice(start, idx)
-            batches.append(slice(start + rank, idx, world_size))
+            batches.append(slice(start, idx))
 
             # Start a new batch with this item
             start = idx
@@ -98,10 +98,10 @@ def compute_batches(lengths, max_tokens: int):
             # It fits, so accumulate and keep going
             tokens_in_batch += length
 
-    # Add the last batch if it has any items
-    if start < len(lengths):
-        batches.append(slice(start + rank, len(lengths), world_size))
+    # distribute batches over different ranks
 
+    batches = batches[rank::world_size]
+    print(f"{len(batches)}")
     return batches
 
 
