@@ -14,29 +14,9 @@ from .utils import assert_type
 
 
 @dataclass
-class IndexConfig:
-    """Config for building the index and running the model/dataset pipeline."""
-
-    run_path: str = field(positional=True)
-    """Name of the run. Used to create a directory for the index."""
-
-    model: str = "HuggingFaceTB/SmolLM2-135M"
-    """Name of the model to load."""
-
+class DataConfig:
     dataset: str = "EleutherAI/SmolLM2-135M-10B"
     """Dataset identifier to build the index from."""
-
-    fsdp: bool = False
-    """Whether to use Fully Sharded Data Parallel (FSDP) for collecing gradients."""
-
-    load_in_8bit: bool = False
-    """Load the model in 8-bit mode. Requires the bitsandbytes library."""
-
-    projection_dim: int = 16
-    """Dimension of the random projection for the index, or 0 to disable it."""
-
-    token_batch_size: int = 8192
-    """Batch size in tokens for building the index."""
 
     prompt_column: str = "text"
     """Column in the dataset that contains the prompts."""
@@ -46,6 +26,32 @@ class IndexConfig:
 
     conversation_column: str = ""
     """Optional column in the dataset that contains the conversation."""
+
+
+@dataclass
+class IndexConfig:
+    """Config for building the index and running the model/dataset pipeline."""
+
+    run_path: str = field(positional=True)
+    """Name of the run. Used to create a directory for the index."""
+
+    data: DataConfig = field(default_factory=DataConfig)
+    """Specification of the data on which to build the index."""
+
+    model: str = "HuggingFaceTB/SmolLM2-135M"
+    """Name of the model to load."""
+
+    fsdp: bool = False
+    """Whether to use Fully Sharded Data Parallel (FSDP) for collecing gradients."""
+
+    precision: Literal["bf16", "fp16", "fp32", "int4", "int8"] = "bf16"
+    """Precision to use for the model parameters."""
+
+    projection_dim: int = 16
+    """Dimension of the random projection for the index, or 0 to disable it."""
+
+    token_batch_size: int = 8192
+    """Batch size in tokens for building the index."""
 
     normalizer: Literal["adafactor", "adam", "none"] = "adafactor"
     """Type of normalizer to use for the gradients."""
@@ -170,7 +176,7 @@ def pad_and_tensor(
     return padded_tokens, padded_labels
 
 
-def tokenize(batch: dict, *, args: IndexConfig, tokenizer):
+def tokenize(batch: dict, *, args: DataConfig, tokenizer):
     """Tokenize a batch of data with `tokenizer` according to `args`."""
     kwargs = dict(
         return_attention_mask=False,

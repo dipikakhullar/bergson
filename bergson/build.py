@@ -30,14 +30,39 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
     )
     torch.cuda.set_device(rank)
 
+    match cfg.precision:
+        case "bf16":
+            dtype = torch.bfloat16
+        case "fp16":
+            dtype = torch.float16
+        case "fp32":
+            dtype = torch.float32
+        case "int4" | "int8":
+            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        case other:
+            raise ValueError(f"Unsupported precision: {other}")
+
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model,
-        device_map={"": f"cuda:{rank}"},
+        device_map={"": f"cuda:{rank}" if not cfg.fsdp else "cpu"},
         quantization_config=(
-            BitsAndBytesConfig(load_in_8bit=True) if cfg.load_in_8bit else None
+            BitsAndBytesConfig(
+                load_in_4bit=cfg.precision == "int4",
+                load_in_8bit=cfg.precision == "int8",
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_quant_storage=dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            if cfg.precision in ("int4", "int8")
+            else None
         ),
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else "auto",
+        torch_dtype=dtype,
     )
+
+    embed = model.get_input_embeddings()
+    model.requires_grad_(False)  # Freeze the model
+    embed.requires_grad_(True)  # Make sure backward hooks are called though
 
     if cfg.fsdp:
         # Shard each individual transformer layer
@@ -72,59 +97,56 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
 
                 target_modules.add(name.removeprefix("model."))
 
-    embed = model.get_input_embeddings()
-    model.requires_grad_(False)  # Freeze the model
-    embed.requires_grad_(True)  # Make sure backward hooks are called though
-
     batches = compute_batches(ds["length"], cfg.token_batch_size)
-    if os.path.exists(cfg.processor_path):
-        if rank == 0:
-            print(f"Loading processor from '{cfg.processor_path}'")
+    try:
+        if os.path.exists(cfg.processor_path):
+            if rank == 0:
+                print(f"Loading processor from '{cfg.processor_path}'")
 
-        processor = GradientProcessor.load(
-            cfg.processor_path,
-            map_location=f"cuda:{rank}",
-        )
-    else:
-        if cfg.normalizer != "none":
-            normalizers = fit_normalizers(
-                model,
-                ds,
-                batches=batches,
-                kind=cfg.normalizer,
-                max_documents=cfg.stats_sample_size or None,
-                target_modules=target_modules,
+            processor = GradientProcessor.load(
+                cfg.processor_path,
+                map_location=f"cuda:{rank}",
             )
         else:
-            normalizers = {}
+            if cfg.normalizer != "none":
+                normalizers = fit_normalizers(
+                    model,
+                    ds,
+                    kind=cfg.normalizer,
+                    max_documents=cfg.stats_sample_size or None,
+                    target_modules=target_modules,
+                )
+            else:
+                normalizers = {}
 
-        processor = GradientProcessor(
-            normalizers,
-            fisher_fourth_root=cfg.fisher_fourth_root,
-            projection_dim=cfg.projection_dim or None,
+            processor = GradientProcessor(
+                normalizers,
+                fisher_fourth_root=cfg.fisher_fourth_root,
+                projection_dim=cfg.projection_dim or None,
+            )
+            if rank == 0:
+                processor.save(cfg.run_path)
+
+        collect_gradients(
+            model,
+            ds,
+            processor,
+            cfg.run_path,
+            batches=batches,
+            target_modules=target_modules,
         )
-        processor.save(cfg.run_path)
-
-    # Build the index
-    collect_gradients(
-        model,
-        ds,
-        processor,
-        cfg.run_path,
-        batches=batches,
-        target_modules=target_modules,
-    )
-    dist.destroy_process_group()
+    finally:
+        dist.destroy_process_group()
 
 
 def build_index(cfg: IndexConfig):
     # Do all the data loading and preprocessing on the main process
     try:
-        ds = assert_type(Dataset, load_dataset(cfg.dataset, split="train"))
+        ds = assert_type(Dataset, load_dataset(cfg.data.dataset, split="train"))
     except ValueError as e:
         # Automatically use load_from_disk if appropriate
         if "load_from_disk" in str(e):
-            ds = Dataset.load_from_disk(cfg.dataset, keep_in_memory=False)
+            ds = Dataset.load_from_disk(cfg.data.dataset, keep_in_memory=False)
         else:
             raise e
 
@@ -137,7 +159,7 @@ def build_index(cfg: IndexConfig):
     ds = ds.map(
         tokenize,
         batched=True,
-        fn_kwargs=dict(args=cfg, tokenizer=tokenizer),
+        fn_kwargs=dict(args=cfg.data, tokenizer=tokenizer),
     )
     ds = ds.sort("length", reverse=True)
 
@@ -160,5 +182,6 @@ def build_index(cfg: IndexConfig):
             for i in range(world_size)
         },
         logs_specs=DefaultLogsSpecs(),
+        start_method="forkserver",
     )
     ctx.wait()

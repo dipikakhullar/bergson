@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from datasets import Dataset
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 
 from .data import create_index, pad_and_tensor
@@ -127,7 +127,6 @@ def fit_normalizers(
     model: PreTrainedModel,
     data: Dataset,
     *,
-    batches: list[slice] | None = None,
     kind: Literal["adafactor", "adam"] = "adafactor",
     max_documents: int | None = None,
     target_modules: set[str] | None = None,
@@ -135,20 +134,20 @@ def fit_normalizers(
     """
     Estimate the second moments of the model's gradients using a subset of the dataset.
     """
+    max_documents = max_documents or len(data)
     normalizers: dict[str, Normalizer] = {}
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
 
-    # Batch size of one by default
-    if batches is None:
-        batches = [slice(idx, idx + 1) for idx in range(len(data))]
+    # Round down to nearest multiple of world_size
+    max_documents -= max_documents % world_size
 
-    # If max_tokens is specified, randomly select a subset of batches
-    elif max_documents is not None:
-        batches = batches.copy()
-
-        rng = random.Random(rank)
-        rng.shuffle(batches)
+    batches = [
+        slice(idx + rank, idx + rank + 1) for idx in range(0, max_documents, world_size)
+    ]
+    # Just to make the pbar more accurate
+    rng = random.Random(0)
+    rng.shuffle(batches)
 
     def adafactor_update(name: str, g: torch.Tensor):
         # We follow the tensor2tensor implementation of Adafactor, which
@@ -184,28 +183,10 @@ def fit_normalizers(
         # in‐place accumulate
         normalizer.avg_sq.add_(sq)
 
-    N = 0
     callback = adafactor_update if kind == "adafactor" else adam_update
-    total = (max_documents or len(batches)) // world_size
-    pbar = trange(total, disable=rank != 0, desc="Estimating normalizers")
 
-    for sl in batches:
+    for sl in tqdm(batches, disable=rank != 0, desc="Estimating normalizers"):
         batch = data[sl]
-
-        # Update progress
-        n = len(batch["input_ids"])
-        pbar.update(n)
-
-        # This is kind of a gross hack
-        if dist.is_initialized():
-            n_th = torch.tensor(n, dtype=torch.int64, device=model.device)
-            dist.all_reduce(n_th)
-
-            n = int(n_th)
-
-        N += n
-        if total and N >= total:
-            break
 
         with GradientCollector(
             model.base_model,
@@ -223,14 +204,14 @@ def fit_normalizers(
     # Divide by the number of documents processed and average across all ranks
     for normalizer in normalizers.values():
         if isinstance(normalizer, AdamNormalizer):
-            normalizer.avg_sq.div_(N)
+            normalizer.avg_sq.div_(max_documents)
 
             if dist.is_initialized():
                 dist.all_reduce(normalizer.avg_sq, op=dist.ReduceOp.AVG)
 
         elif isinstance(normalizer, AdafactorNormalizer):
-            normalizer.row.div_(N)
-            normalizer.col.div_(N)
+            normalizer.row.div_(max_documents)
+            normalizer.col.div_(max_documents)
 
             if dist.is_initialized():
                 dist.all_reduce(normalizer.row, op=dist.ReduceOp.AVG)
