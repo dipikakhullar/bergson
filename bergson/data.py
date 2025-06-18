@@ -26,6 +26,9 @@ class IndexConfig:
     dataset: str = "EleutherAI/SmolLM2-135M-10B"
     """Dataset identifier to build the index from."""
 
+    fsdp: bool = False
+    """Whether to use Fully Sharded Data Parallel (FSDP) for collecing gradients."""
+
     load_in_8bit: bool = False
     """Load the model in 8-bit mode. Requires the bitsandbytes library."""
 
@@ -93,22 +96,19 @@ def compute_batches(lengths, max_tokens: int):
     return batches
 
 
-def create_index(path: str, dtype: DTypeLike, shape: tuple[int, ...]) -> np.memmap:
-    """
-    If `create=True` *and we're rank-0* we allocate the file; everyone else
-    opens read-only.  Metadata is persisted alongside the file so reruns work.
-    """
+def create_index(root: str, dtype: DTypeLike, shape: tuple[int, ...]) -> np.memmap:
+    """Create a memory-mapped file for storing gradients, and persist metadata."""
+    grad_path = os.path.join(root, "gradients.bin")
     rank = dist.get_rank() if dist.is_initialized() else 0
 
     # ── 1. Rank-0 creates file & metadata exactly once ─────────────────────────
     if rank == 0:
         # Ensure the directory exists
-        root = os.path.dirname(path)
         os.makedirs(root, exist_ok=True)
 
         # Allocate (extends file to right size without writing zeros byte-by-byte)
         nbytes = np.dtype(dtype).itemsize * int(np.prod(shape))
-        with open(path, "wb") as f:
+        with open(grad_path, "wb") as f:
             f.truncate(nbytes)
 
             # Force the directory entry + data to disk *before* other ranks continue
@@ -122,8 +122,7 @@ def create_index(path: str, dtype: DTypeLike, shape: tuple[int, ...]) -> np.memm
     if dist.is_initialized():
         dist.barrier()
 
-    # 4. Map the data.  Rank-0 may want r+ to write, others usually 'r'.
-    return np.memmap(path + "/gradients.bin", dtype=dtype, mode="w+", shape=shape)
+    return np.memmap(grad_path, dtype=dtype, mode="w+", shape=shape)
 
 
 def load_gradients(root_dir: str) -> np.memmap:

@@ -1,22 +1,28 @@
 import os
+import socket
 from datetime import timedelta
 
 import torch
 import torch.distributed as dist
 from datasets import Dataset, load_dataset
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
+from torch.distributed.fsdp import fully_shard
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from .data import IndexConfig, compute_batches, tokenize
 from .gradients import GradientProcessor
 from .processing import collect_gradients, fit_normalizers
-from .utils import assert_type
+from .utils import assert_type, get_layer_list
 
 
 def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
+    # These should be set by the main process
+    addr = os.environ.get("MASTER_ADDR", "localhost")
+    port = os.environ.get("MASTER_PORT", "29500")
+
     dist.init_process_group(
         "nccl",
-        init_method="tcp://localhost:29500",
+        init_method=f"tcp://{addr}:{port}",
         device_id=torch.device(f"cuda:{rank}"),
         rank=rank,
         timeout=timedelta(hours=1),
@@ -32,6 +38,14 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
         ),
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else "auto",
     )
+
+    if cfg.fsdp:
+        # Shard each individual transformer layer
+        for layer in get_layer_list(model):
+            fully_shard(layer)
+
+        # Shard the entire model
+        fully_shard(model)
 
     # Check for PEFT adapters
     try:
@@ -127,12 +141,24 @@ def build_index(cfg: IndexConfig):
     )
     ds = ds.sort("length", reverse=True)
 
+    # Find an available port for distributed training
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        _, port = s.getsockname()
+
     world_size = torch.cuda.device_count()
     ctx = start_processes(
         "build",
         worker,
         args={i: (i, world_size, cfg, ds) for i in range(world_size)},
-        envs={i: {"LOCAL_RANK": str(i)} for i in range(world_size)},
+        envs={
+            i: {
+                "LOCAL_RANK": str(i),
+                "MASTER_ADDR": "localhost",
+                "MASTER_PORT": str(port),
+            }
+            for i in range(world_size)
+        },
         logs_specs=DefaultLogsSpecs(),
     )
     ctx.wait()

@@ -66,7 +66,7 @@ def collect_gradients(
     # Allocate space ahead of time for the gradients
     grad_size = sum(math.prod(s) for s in collector.shapes().values())
     grad_buffer = create_index(
-        path + "/gradients.bin",
+        path,
         dtype=np.float16,
         shape=(len(data), grad_size),
     )
@@ -195,6 +195,13 @@ def fit_normalizers(
         # Update progress
         n = len(batch["input_ids"])
         pbar.update(n)
+
+        # This is kind of a gross hack
+        if dist.is_initialized():
+            n_th = torch.tensor(n, dtype=torch.int64, device=model.device)
+            dist.all_reduce(n_th)
+
+            n = int(n_th)
 
         N += n
         if total and N >= total:
