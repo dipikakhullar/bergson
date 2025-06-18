@@ -100,12 +100,12 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
     batches = compute_batches(ds["length"], cfg.token_batch_size)
 
     try:
-        if os.path.exists(cfg.processor_path):
+        if GradientProcessor.exists(cfg.run_path):
             if rank == 0:
-                print(f"Loading processor from '{cfg.processor_path}'")
+                print(f"Loading processor from '{cfg.run_path}'")
 
             processor = GradientProcessor.load(
-                cfg.processor_path,
+                cfg.run_path,
                 map_location=f"cuda:{rank}",
             )
         else:
@@ -113,6 +113,7 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
                 normalizers = fit_normalizers(
                     model,
                     ds,
+                    batches=batches,
                     kind=cfg.normalizer,
                     max_documents=cfg.stats_sample_size or None,
                     target_modules=target_modules,

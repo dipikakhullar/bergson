@@ -160,9 +160,9 @@ class AdamNormalizer(Normalizer):
         and the factored second moments.
         """
         # We assume avg_sq is a square matrix of shape [O, I]
-        assert (
-            self.avg_sq.ndim == 2
-        ), f"Expected 2D tensor for avg_sq, got {self.avg_sq.ndim}D"
+        assert self.avg_sq.ndim == 2, (
+            f"Expected 2D tensor for avg_sq, got {self.avg_sq.ndim}D"
+        )
 
         # Compute row and column means
         return AdafactorNormalizer(
@@ -237,6 +237,17 @@ class GradientProcessor:
                 weights_only=True,
             ),
             projection_dim=cfg.get("projection_dim"),
+        )
+
+    @classmethod
+    def exists(cls, path: str) -> bool:
+        """
+        Check if the processor exists in the given path.
+        """
+        return (
+            os.path.exists(os.path.join(path, "processor_config.json"))
+            and os.path.exists(os.path.join(path, "normalizers.pth"))
+            and os.path.exists(os.path.join(path, "preconditioners.pth"))
         )
 
     def save(self, path: str):
